@@ -5,6 +5,22 @@ from pydantic import BaseModel
 from typing import List, Optional, Any
 from database import get_connection
 
+def safe_num(val):
+    """Safely convert FBref values to a number, returning None for non-numeric."""
+    if val is None:
+        return None
+    s = str(val).strip().replace(",", "").replace("%", "").replace("N/A", "").replace("nan", "")
+    if not s:
+        return None
+    try:
+        return int(s)
+    except ValueError:
+        try:
+            return float(s)
+        except ValueError:
+            return None
+
+
 router = APIRouter()
 
 # ─── Pydantic models ─────────────────────────────────────────────────────────
@@ -317,9 +333,9 @@ def _insert_squad_stats(cur, league_id, season_id, stats_rows):
                 scraped_at=NOW()
         """, (
             team_id, league_id, season_id, split,
-            row.get("players_used"), row.get("avg_age"), row.get("possession"),
-            row.get("games"), row.get("games_starts"), row.get("minutes"), row.get("minutes_90s"),
-            row.get("goals"), row.get("assists"),
+            safe_num(row.get("players_used")), safe_num(row.get("avg_age")), safe_num(row.get("possession")),
+            safe_num(row.get("games")), safe_num(row.get("games_starts")), safe_num(row.get("minutes")), safe_num(row.get("minutes_90s")),
+            safe_num(row.get("goals")), safe_num(row.get("assists")),
             json.dumps(row.get("standard_stats") or {}),
             json.dumps(row.get("goalkeeping") or {}),
             json.dumps(row.get("shooting") or {}),
