@@ -21,6 +21,27 @@ def safe_num(val):
             return None
 
 
+def safe_text(val):
+    """Extract plain text from a value that may be a dict/link object or plain string.
+    FBref cells often come as {"link": "...", "text": "Team Name"} — extract text.
+    """
+    if val is None:
+        return ""
+    if isinstance(val, dict):
+        return str(val.get("text", val.get("name", ""))).strip()
+    s = str(val).strip()
+    # Handle Python-stringified dicts like "{'link': '...', 'text': 'Team'}"
+    if s.startswith("{") and ("'text'" in s or '"text"' in s):
+        try:
+            import ast
+            d = ast.literal_eval(s)
+            if isinstance(d, dict):
+                return str(d.get("text", d.get("name", ""))).strip()
+        except Exception:
+            pass
+    return s
+
+
 router = APIRouter()
 
 # ─── Pydantic models ─────────────────────────────────────────────────────────
@@ -81,7 +102,7 @@ def tables_to_squad_stats(tables: List[TableData]) -> List[dict]:
             if len(row) < 2:
                 continue
             r = dict(zip(headers, row))
-            team = str(r.get("squad", r.get("team", ""))).strip()
+            team = safe_text(r.get("squad", r.get("team", "")))
             if not team or team.lower() in ("squad", "team", ""):
                 continue
             # Put everything else into standard_stats JSONB
@@ -111,7 +132,7 @@ def tables_to_player_stats(tables: List[TableData]) -> List[dict]:
             if len(row) < 2:
                 continue
             r = dict(zip(headers, row))
-            name = str(r.get("player", "")).strip()
+            name = safe_text(r.get("player", ""))
             if not name or name.lower() in ("player", ""):
                 continue
             extra = {k: v for k, v in r.items() if k not in ("player",)}
