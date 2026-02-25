@@ -166,6 +166,7 @@ def detect_table_type(table: TableData) -> str:
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 def get_or_create(cur, table, unique_cols: dict, extra_cols: dict = {}):
+    """Generic exact-match get-or-create (kept for backward compat)."""
     where = " AND ".join(f"{k}=%s" for k in unique_cols)
     cur.execute(f"SELECT id FROM {table} WHERE {where}", list(unique_cols.values()))
     row = cur.fetchone()
@@ -175,6 +176,50 @@ def get_or_create(cur, table, unique_cols: dict, extra_cols: dict = {}):
     cols = ", ".join(all_cols.keys())
     placeholders = ", ".join(["%s"] * len(all_cols))
     cur.execute(f"INSERT INTO {table} ({cols}) VALUES ({placeholders}) RETURNING id", list(all_cols.values()))
+    return cur.fetchone()["id"]
+
+
+def get_or_create_league(cur, name: str) -> int:
+    """Case-insensitive league lookup. Normalises to title-case on insert.
+    Raises ValueError if name is a bare year (e.g. '2025').
+    """
+    clean = name.strip()
+    if clean.isdigit():
+        raise ValueError(f"Invalid league name '{clean}' — looks like a year, not a league.")
+    cur.execute("SELECT id FROM leagues WHERE name ILIKE %s LIMIT 1", (clean,))
+    row = cur.fetchone()
+    if row:
+        return row["id"]
+    normalized = clean.title()
+    cur.execute("INSERT INTO leagues (name) VALUES (%s) RETURNING id", (normalized,))
+    return cur.fetchone()["id"]
+
+
+def get_or_create_season(cur, name: str) -> int:
+    """Case-insensitive season lookup."""
+    clean = name.strip()
+    cur.execute("SELECT id FROM seasons WHERE name ILIKE %s LIMIT 1", (clean,))
+    row = cur.fetchone()
+    if row:
+        return row["id"]
+    cur.execute("INSERT INTO seasons (name) VALUES (%s) RETURNING id", (clean,))
+    return cur.fetchone()["id"]
+
+
+def get_or_create_team(cur, name: str, league_id: int) -> int:
+    """Case-insensitive team lookup within a league."""
+    clean = safe_text(name) or name.strip()
+    cur.execute(
+        "SELECT id FROM teams WHERE name ILIKE %s AND league_id = %s LIMIT 1",
+        (clean, league_id)
+    )
+    row = cur.fetchone()
+    if row:
+        return row["id"]
+    cur.execute(
+        "INSERT INTO teams (name, league_id) VALUES (%s, %s) RETURNING id",
+        (clean, league_id)
+    )
     return cur.fetchone()["id"]
 
 
@@ -207,8 +252,8 @@ def sync_all(payload: SyncPayload):
     conn = get_connection()
     cur = conn.cursor()
     try:
-        league_id = get_or_create(cur, "leagues", {"name": payload.league})
-        season_id = get_or_create(cur, "seasons", {"name": payload.season})
+        league_id = get_or_create_league(cur, payload.league)
+        season_id = get_or_create_season(cur, payload.season)
 
         # If extension sent raw tables, classify and convert them
         fixtures_list = payload.fixtures or []
@@ -245,8 +290,8 @@ def sync_fixtures(payload: SyncPayload):
     conn = get_connection()
     cur = conn.cursor()
     try:
-        league_id = get_or_create(cur, "leagues", {"name": payload.league})
-        season_id = get_or_create(cur, "seasons", {"name": payload.season})
+        league_id = get_or_create_league(cur, payload.league)
+        season_id = get_or_create_season(cur, payload.season)
         rows = payload.fixtures or []
         if payload.tables:
             rows.extend(tables_to_fixtures(payload.tables))
@@ -265,8 +310,8 @@ def sync_stats(payload: SyncPayload):
     conn = get_connection()
     cur = conn.cursor()
     try:
-        league_id = get_or_create(cur, "leagues", {"name": payload.league})
-        season_id = get_or_create(cur, "seasons", {"name": payload.season})
+        league_id = get_or_create_league(cur, payload.league)
+        season_id = get_or_create_season(cur, payload.season)
         rows = payload.stats or []
         if payload.tables:
             rows.extend(tables_to_squad_stats(payload.tables))
@@ -285,7 +330,7 @@ def sync_player_stats(payload: SyncPayload):
     conn = get_connection()
     cur = conn.cursor()
     try:
-        season_id = get_or_create(cur, "seasons", {"name": payload.season})
+        season_id = get_or_create_season(cur, payload.season)
         rows = payload.player_stats or payload.playerStats or []
         if payload.tables:
             rows.extend(tables_to_player_stats(payload.tables))
@@ -307,8 +352,8 @@ def _insert_fixtures(cur, league_id, season_id, league_name, fixtures):
         away = str(f.get("away_team", "")).strip()
         if not home or not away:
             continue
-        home_id = get_or_create(cur, "teams", {"name": home, "league_id": league_id})
-        away_id = get_or_create(cur, "teams", {"name": away, "league_id": league_id})
+        home_id = get_or_create_team(cur, home, league_id)
+        away_id = get_or_create_team(cur, away, league_id)
         home_score, away_score = parse_score(f.get("score"))
         match_date = parse_date(f.get("date"))
         cur.execute("""
@@ -336,12 +381,12 @@ def _insert_fixtures(cur, league_id, season_id, league_name, fixtures):
 def _insert_squad_stats(cur, league_id, season_id, stats_rows):
     count = 0
     for row in stats_rows:
-        team_raw = str(row.get("team", "")).strip()
+        team_raw = safe_text(row.get("team", ""))
         if not team_raw:
             continue
         split = "against" if team_raw.startswith("vs ") else "for"
-        team_name = team_raw[3:] if split == "against" else team_raw
-        team_id = get_or_create(cur, "teams", {"name": team_name, "league_id": league_id})
+        team_name = team_raw[3:].strip() if split == "against" else team_raw
+        team_id = get_or_create_team(cur, team_name, league_id)
         cur.execute("""
             INSERT INTO team_squad_stats
                 (team_id, league_id, season_id, split, players_used, avg_age, possession,
@@ -379,7 +424,7 @@ def _insert_player_stats(cur, season_id, league_name, players):
             cur.execute("SELECT id FROM leagues WHERE name ILIKE %s LIMIT 1", (f"%{league_name}%",))
             lg = cur.fetchone()
             if lg:
-                team_id = get_or_create(cur, "teams", {"name": team_name, "league_id": lg["id"]})
+                team_id = get_or_create_team(cur, team_name, lg["id"])
         cur.execute("""
             INSERT INTO player_stats
                 (player_name, nationality, position, team_id, season_id,

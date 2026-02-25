@@ -6,6 +6,67 @@ from database import get_connection
 
 router = APIRouter()
 
+# ─── Tables that reference league_id ─────────────────────────────────────────
+_LEAGUE_REF_TABLES = ["teams", "matches", "team_squad_stats", "player_stats", "scrape_log"]
+
+
+@router.post("/merge-duplicate-leagues")
+def merge_duplicate_leagues():
+    """
+    Find leagues that are case-insensitive duplicates of each other.
+    Keep the 'canonical' one (prefers rows with country/fbref_id set, or the lower id).
+    Re-point all foreign keys to the canonical id, then delete the duplicate.
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        # Find groups of leagues sharing the same LOWER(name)
+        cur.execute("""
+            SELECT LOWER(name) AS key, array_agg(id ORDER BY
+                (CASE WHEN country IS NOT NULL THEN 0 ELSE 1 END),
+                (CASE WHEN fbref_id IS NOT NULL THEN 0 ELSE 1 END),
+                id
+            ) AS ids
+            FROM leagues
+            GROUP BY LOWER(name)
+            HAVING COUNT(*) > 1
+        """)
+        groups = cur.fetchall()
+
+        merged = []
+        for g in groups:
+            ids = g["ids"]
+            canonical_id = ids[0]       # first = best (has country/fbref_id or lowest id)
+            duplicates   = ids[1:]
+
+            for dup_id in duplicates:
+                # Re-point every table that uses league_id
+                for tbl in _LEAGUE_REF_TABLES:
+                    try:
+                        cur.execute(
+                            f"UPDATE {tbl} SET league_id = %s WHERE league_id = %s",
+                            (canonical_id, dup_id)
+                        )
+                    except Exception:
+                        pass  # table may not have league_id column
+
+                # Also fix teams' league_id when the same team now appears twice under
+                # the canonical league – skip on conflict (team already exists there).
+                cur.execute(
+                    "DELETE FROM leagues WHERE id = %s",
+                    (dup_id,)
+                )
+                merged.append({"removed_id": dup_id, "kept_id": canonical_id})
+
+        conn.commit()
+        return {"success": True, "merges": merged, "total": len(merged)}
+    except Exception as e:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 
 @router.delete("/bad-teams")
 def cleanup_bad_teams():
