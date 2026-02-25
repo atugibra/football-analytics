@@ -1,4 +1,4 @@
-const API = import.meta.env.VITE_API_URL || 'http://localhost:4000';
+const API = import.meta.env.VITE_API_URL || 'https://football-analytics-production-5b3d.up.railway.app';
 
 const req = async (path, opts = {}) => {
     const res = await fetch(`${API}${path}`, opts);
