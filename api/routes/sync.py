@@ -64,7 +64,10 @@ class SyncPayload(BaseModel):
 
 # ─── Raw table → dict converters ─────────────────────────────────────────────
 def tables_to_fixtures(tables: List[TableData]) -> List[dict]:
-    """Convert raw scraped fixture tables into fixture dicts."""
+    """Convert raw scraped fixture tables into fixture dicts.
+    FBref uses data-stat attribute names as headers:
+      home_team, away_team, date, start_time, score, gameweek, dayofweek, venue, attendance, referee
+    """
     result = []
     for table in tables:
         headers = [h.strip().lower() for h in table.headers]
@@ -72,23 +75,23 @@ def tables_to_fixtures(tables: List[TableData]) -> List[dict]:
             if len(row) < 3:
                 continue
             r = dict(zip(headers, row))
-            # Map FBref column names to our schema
-            home = str(r.get("home", r.get("home team", ""))).strip()
-            away = str(r.get("away", r.get("away team", ""))).strip()
-            if not home or not away or home.lower() in ("home", ""):
+            # Priority: data-stat names first, then legacy display-text names
+            home = safe_text(r.get("home_team", r.get("home", r.get("home team", ""))))
+            away = safe_text(r.get("away_team", r.get("away", r.get("away team", ""))))
+            if not home or not away or home.lower() in ("home", "home_team", ""):
                 continue
             result.append({
-                "home_team": home,
-                "away_team": away,
-                "date": r.get("date", r.get("dates", "")),
-                "start_time": r.get("time", ""),
-                "score": r.get("score", ""),
-                "gameweek": r.get("wk", r.get("round", r.get("gameweek", ""))),
-                "dayofweek": r.get("day", ""),
-                "venue": r.get("venue", ""),
+                "home_team":  home,
+                "away_team":  away,
+                "date":       r.get("date", r.get("dates", "")),
+                "start_time": r.get("start_time", r.get("time", "")),
+                "score":      r.get("score", ""),
+                "gameweek":   r.get("gameweek", r.get("wk", r.get("round", ""))),
+                "dayofweek":  r.get("dayofweek", r.get("day", "")),
+                "venue":      r.get("venue", ""),
                 "attendance": r.get("attendance", ""),
-                "referee": r.get("referee", ""),
-                "round": r.get("round", ""),
+                "referee":    r.get("referee", ""),
+                "round":      r.get("round", r.get("gameweek", "")),
             })
     return result
 
@@ -155,18 +158,39 @@ def tables_to_player_stats(tables: List[TableData]) -> List[dict]:
 
 
 def detect_table_type(table: TableData) -> str:
-    """Detect if a table contains fixtures, player stats, squad stats, or standings."""
+    """Detect table type from FBref data-stat headers.
+
+    FBref actual data-stat header names (used by content_scraper.js):
+      Standings : rank, team, games, wins, ties, losses, goals_for, goals_against, goal_diff, points
+      Fixtures  : date, home_team, away_team, score, gameweek, dayofweek, start_time
+      Squad stats: team, players_used, avg_age, possession, goals, assists …
+      Player stats: player, nationality, position, team, age …
+    """
     headers_lower = [h.strip().lower() for h in table.headers]
-    # Standings: must have a rank/position column + points column + team column
-    has_rank   = any(h in headers_lower for h in ("rk", "rank", "pos", "#"))
-    has_pts    = any(h in headers_lower for h in ("pts", "points", "pt"))
-    has_squad  = any(h in headers_lower for h in ("squad", "team"))
-    if has_rank and has_pts and has_squad:
+
+    # ── Standings ─────────────────────────────────────────────────────────────
+    # Exact rank column + exact points column + team column
+    # Deliberately strict to avoid matching the home/away split table
+    has_rank  = "rank" in headers_lower or "rk" in headers_lower
+    has_pts   = "points" in headers_lower or "pts" in headers_lower
+    has_squad = "team" in headers_lower or "squad" in headers_lower
+    # Extra guard: real standings have wins/losses; home-split table starts with home_games
+    has_wins  = "wins" in headers_lower or "w" in headers_lower
+    if has_rank and has_pts and has_squad and has_wins:
         return "standings"
-    if "home" in headers_lower or ("date" in headers_lower and "score" in headers_lower):
+
+    # ── Fixtures ──────────────────────────────────────────────────────────────
+    # data-stat: home_team (not "home") + date + score
+    has_home_team = "home_team" in headers_lower or "home" in headers_lower
+    has_date      = "date" in headers_lower
+    has_score     = "score" in headers_lower
+    if has_home_team or (has_date and has_score):
         return "fixtures"
+
+    # ── Player stats ──────────────────────────────────────────────────────────
     if "player" in headers_lower:
         return "player_stats"
+
     return "squad_stats"
 
 
