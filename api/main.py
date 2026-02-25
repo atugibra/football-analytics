@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
-from routes import leagues, teams, matches, standings, squad_stats, player_stats, sync, health
+from routes import leagues, teams, matches, standings, squad_stats, player_stats, sync, health, auth
 
 load_dotenv()
 
@@ -31,6 +31,7 @@ app.include_router(standings.router,    prefix="/api/standings",   tags=["Standi
 app.include_router(squad_stats.router,  prefix="/api/squad-stats", tags=["Squad Stats"])
 app.include_router(player_stats.router, prefix="/api/players",     tags=["Players"])
 app.include_router(sync.router,         prefix="/api/sync",        tags=["Sync"])
+app.include_router(auth.router,                                    tags=["Auth"])
 
 if __name__ == "__main__":
     import uvicorn
