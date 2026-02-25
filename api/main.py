@@ -16,8 +16,15 @@ app = FastAPI(
 # Allow requests from React dashboard and Chrome extension
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://localhost:4000",
+        "https://football-analytics-eight.vercel.app",
+        "https://*.vercel.app",
+        "*",
+    ],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )

@@ -10,7 +10,9 @@ export default function SyncManager() {
 
     useEffect(() => {
         getHealth().then(setHealth).catch(() => setHealth({ status: 'unhealthy' }));
-        getLeagues().then(setLeagues);
+        getLeagues()
+            .then(data => setLeagues(Array.isArray(data) ? data : []))
+            .catch(err => { console.error('getLeagues failed:', err); setLeagues([]); });
     }, []);
 
     const addLog = (msg, type = 'info') => setLog(l => [{ msg, type, time: new Date().toLocaleTimeString() }, ...l]);
