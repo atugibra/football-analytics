@@ -7,32 +7,128 @@ from database import get_connection
 
 router = APIRouter()
 
-# ─── Pydantic models for the bulk sync payloads ──────────────────────────────
-class SyncFixturesPayload(BaseModel):
-    league: str
-    season: str
-    fixtures: List[dict]
+# ─── Pydantic models ─────────────────────────────────────────────────────────
+class TableData(BaseModel):
+    headers: List[str] = []
+    rows: List[List[Any]] = []
+    rowCount: Optional[int] = None
 
-class SyncStatsPayload(BaseModel):
+class SyncPayload(BaseModel):
+    """Flexible payload - accepts raw tables (from extension) OR pre-processed lists"""
     league: str
     season: str
-    stats: List[dict]
+    # Raw table format (from Chrome extension)
+    tables: Optional[List[TableData]] = None
+    # Pre-processed format (from Excel importer)
+    fixtures: Optional[List[dict]] = None
+    stats: Optional[List[dict]] = None
+    player_stats: Optional[List[dict]] = None
+    playerStats: Optional[List[dict]] = None
 
-class SyncPlayerStatsPayload(BaseModel):
-    league: str
-    season: str
-    player_stats: List[dict]
+# ─── Raw table → dict converters ─────────────────────────────────────────────
+def tables_to_fixtures(tables: List[TableData]) -> List[dict]:
+    """Convert raw scraped fixture tables into fixture dicts."""
+    result = []
+    for table in tables:
+        headers = [h.strip().lower() for h in table.headers]
+        for row in table.rows:
+            if len(row) < 3:
+                continue
+            r = dict(zip(headers, row))
+            # Map FBref column names to our schema
+            home = str(r.get("home", r.get("home team", ""))).strip()
+            away = str(r.get("away", r.get("away team", ""))).strip()
+            if not home or not away or home.lower() in ("home", ""):
+                continue
+            result.append({
+                "home_team": home,
+                "away_team": away,
+                "date": r.get("date", r.get("dates", "")),
+                "start_time": r.get("time", ""),
+                "score": r.get("score", ""),
+                "gameweek": r.get("wk", r.get("round", r.get("gameweek", ""))),
+                "dayofweek": r.get("day", ""),
+                "venue": r.get("venue", ""),
+                "attendance": r.get("attendance", ""),
+                "referee": r.get("referee", ""),
+                "round": r.get("round", ""),
+            })
+    return result
 
-class SyncAllPayload(BaseModel):
-    league: str
-    season: str
-    fixtures: Optional[List[dict]] = []
-    stats: Optional[List[dict]] = []
-    playerStats: Optional[List[dict]] = []
+
+def tables_to_squad_stats(tables: List[TableData]) -> List[dict]:
+    """Convert raw scraped squad stats tables into stat dicts."""
+    result = []
+    for table in tables:
+        headers = [h.strip().lower() for h in table.headers]
+        for row in table.rows:
+            if len(row) < 2:
+                continue
+            r = dict(zip(headers, row))
+            team = str(r.get("squad", r.get("team", ""))).strip()
+            if not team or team.lower() in ("squad", "team", ""):
+                continue
+            # Put everything else into standard_stats JSONB
+            extra = {k: v for k, v in r.items() if k not in ("squad", "team")}
+            result.append({
+                "team": team,
+                "players_used": r.get("# pl", r.get("players used", r.get("players_used", None))),
+                "avg_age": r.get("age", r.get("avg age", None)),
+                "possession": r.get("poss", r.get("possession", None)),
+                "games": r.get("mp", r.get("games", None)),
+                "games_starts": r.get("starts", r.get("games_starts", None)),
+                "minutes": r.get("min", r.get("minutes", None)),
+                "minutes_90s": r.get("90s", r.get("minutes_90s", None)),
+                "goals": r.get("gls", r.get("goals", None)),
+                "assists": r.get("ast", r.get("assists", None)),
+                "standard_stats": extra,
+            })
+    return result
+
+
+def tables_to_player_stats(tables: List[TableData]) -> List[dict]:
+    """Convert raw scraped player tables into player stat dicts."""
+    result = []
+    for table in tables:
+        headers = [h.strip().lower() for h in table.headers]
+        for row in table.rows:
+            if len(row) < 2:
+                continue
+            r = dict(zip(headers, row))
+            name = str(r.get("player", "")).strip()
+            if not name or name.lower() in ("player", ""):
+                continue
+            extra = {k: v for k, v in r.items() if k not in ("player",)}
+            result.append({
+                "player": name,
+                "nationality": r.get("nation", r.get("nationality", "")),
+                "position": r.get("pos", r.get("position", "")),
+                "team": r.get("squad", r.get("team", "")),
+                "age": r.get("age", None),
+                "birth_year": r.get("born", r.get("birth_year", None)),
+                "games": r.get("mp", r.get("games", None)),
+                "games_starts": r.get("starts", None),
+                "minutes": r.get("min", r.get("minutes", None)),
+                "minutes_90s": r.get("90s", None),
+                "goals": r.get("gls", r.get("goals", None)),
+                "assists": r.get("ast", r.get("assists", None)),
+                "standard_stats": extra,
+            })
+    return result
+
+
+def detect_table_type(table: TableData) -> str:
+    """Detect if a table contains fixtures, player stats, or squad stats."""
+    headers_lower = [h.strip().lower() for h in table.headers]
+    if "home" in headers_lower or ("date" in headers_lower and "score" in headers_lower):
+        return "fixtures"
+    if "player" in headers_lower:
+        return "player_stats"
+    return "squad_stats"
+
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 def get_or_create(cur, table, unique_cols: dict, extra_cols: dict = {}):
-    """Return the ID of an existing row or insert and return the new ID."""
     where = " AND ".join(f"{k}=%s" for k in unique_cols)
     cur.execute(f"SELECT id FROM {table} WHERE {where}", list(unique_cols.values()))
     row = cur.fetchone()
@@ -44,8 +140,8 @@ def get_or_create(cur, table, unique_cols: dict, extra_cols: dict = {}):
     cur.execute(f"INSERT INTO {table} ({cols}) VALUES ({placeholders}) RETURNING id", list(all_cols.values()))
     return cur.fetchone()["id"]
 
+
 def parse_score(score_raw: str):
-    """Parse '2–1' → (2, 1). Returns (None, None) for future matches."""
     if not score_raw or str(score_raw).strip() in ("", "nan", "None"):
         return None, None
     cleaned = re.sub(r"\s*\(.*?\)", "", str(score_raw)).strip()
@@ -58,6 +154,7 @@ def parse_score(score_raw: str):
                 return None, None
     return None, None
 
+
 def parse_date(raw):
     if not raw or str(raw).strip() in ("", "nan", "None"):
         return None
@@ -66,28 +163,39 @@ def parse_date(raw):
         return f"{s[:4]}-{s[4:6]}-{s[6:]}"
     return s[:10]
 
-# ─── Full sync endpoint (used by the Chrome extension) ───────────────────────
+
+# ─── Sync endpoint (used by Chrome extension AND importer) ───────────────────
 @router.post("/all")
-def sync_all(payload: SyncAllPayload):
+def sync_all(payload: SyncPayload):
     conn = get_connection()
     cur = conn.cursor()
     try:
         league_id = get_or_create(cur, "leagues", {"name": payload.league})
         season_id = get_or_create(cur, "seasons", {"name": payload.season})
 
-        fixtures_inserted = _insert_fixtures(cur, league_id, season_id, payload.league, payload.fixtures or [])
-        stats_inserted    = _insert_squad_stats(cur, league_id, season_id, payload.stats or [])
-        players_inserted  = _insert_player_stats(cur, season_id, payload.league, payload.playerStats or [])
+        # If extension sent raw tables, classify and convert them
+        fixtures_list = payload.fixtures or []
+        stats_list = payload.stats or []
+        players_list = payload.playerStats or payload.player_stats or []
+
+        if payload.tables:
+            for t in payload.tables:
+                ttype = detect_table_type(t)
+                if ttype == "fixtures":
+                    fixtures_list.extend(tables_to_fixtures([t]))
+                elif ttype == "player_stats":
+                    players_list.extend(tables_to_player_stats([t]))
+                else:
+                    stats_list.extend(tables_to_squad_stats([t]))
+
+        fx  = _insert_fixtures(cur, league_id, season_id, payload.league, fixtures_list)
+        st  = _insert_squad_stats(cur, league_id, season_id, stats_list)
+        pl  = _insert_player_stats(cur, season_id, payload.league, players_list)
 
         conn.commit()
-        log_scrape(cur, league_id, season_id, "sync_all", fixtures_inserted + stats_inserted + players_inserted, 0)
+        log_scrape(cur, league_id, season_id, "sync_all", fx + st + pl, 0)
         conn.commit()
-        return {
-            "success": True,
-            "fixtures_inserted": fixtures_inserted,
-            "stats_inserted": stats_inserted,
-            "players_inserted": players_inserted,
-        }
+        return {"success": True, "fixtures_inserted": fx, "stats_inserted": st, "players_inserted": pl}
     except Exception as e:
         conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
@@ -96,13 +204,16 @@ def sync_all(payload: SyncAllPayload):
 
 
 @router.post("/fixtures")
-def sync_fixtures(payload: SyncFixturesPayload):
+def sync_fixtures(payload: SyncPayload):
     conn = get_connection()
     cur = conn.cursor()
     try:
         league_id = get_or_create(cur, "leagues", {"name": payload.league})
         season_id = get_or_create(cur, "seasons", {"name": payload.season})
-        inserted = _insert_fixtures(cur, league_id, season_id, payload.league, payload.fixtures)
+        rows = payload.fixtures or []
+        if payload.tables:
+            rows.extend(tables_to_fixtures(payload.tables))
+        inserted = _insert_fixtures(cur, league_id, season_id, payload.league, rows)
         conn.commit()
         return {"success": True, "matches_inserted": inserted}
     except Exception as e:
@@ -113,13 +224,16 @@ def sync_fixtures(payload: SyncFixturesPayload):
 
 
 @router.post("/stats")
-def sync_stats(payload: SyncStatsPayload):
+def sync_stats(payload: SyncPayload):
     conn = get_connection()
     cur = conn.cursor()
     try:
         league_id = get_or_create(cur, "leagues", {"name": payload.league})
         season_id = get_or_create(cur, "seasons", {"name": payload.season})
-        inserted = _insert_squad_stats(cur, league_id, season_id, payload.stats)
+        rows = payload.stats or []
+        if payload.tables:
+            rows.extend(tables_to_squad_stats(payload.tables))
+        inserted = _insert_squad_stats(cur, league_id, season_id, rows)
         conn.commit()
         return {"success": True, "stats_inserted": inserted}
     except Exception as e:
@@ -130,12 +244,15 @@ def sync_stats(payload: SyncStatsPayload):
 
 
 @router.post("/player-stats")
-def sync_player_stats(payload: SyncPlayerStatsPayload):
+def sync_player_stats(payload: SyncPayload):
     conn = get_connection()
     cur = conn.cursor()
     try:
         season_id = get_or_create(cur, "seasons", {"name": payload.season})
-        inserted = _insert_player_stats(cur, season_id, payload.league, payload.player_stats)
+        rows = payload.player_stats or payload.playerStats or []
+        if payload.tables:
+            rows.extend(tables_to_player_stats(payload.tables))
+        inserted = _insert_player_stats(cur, season_id, payload.league, rows)
         conn.commit()
         return {"success": True, "players_inserted": inserted}
     except Exception as e:
@@ -144,7 +261,8 @@ def sync_player_stats(payload: SyncPlayerStatsPayload):
     finally:
         conn.close()
 
-# ─── Internal helpers ────────────────────────────────────────────────────────
+
+# ─── Internal insert helpers ─────────────────────────────────────────────────
 def _insert_fixtures(cur, league_id, season_id, league_name, fixtures):
     count = 0
     for f in fixtures:
@@ -196,10 +314,6 @@ def _insert_squad_stats(cur, league_id, season_id, stats_rows):
             ON CONFLICT (team_id, season_id, split) DO UPDATE SET
                 goals=EXCLUDED.goals, assists=EXCLUDED.assists,
                 standard_stats=EXCLUDED.standard_stats,
-                goalkeeping=EXCLUDED.goalkeeping,
-                shooting=EXCLUDED.shooting,
-                playing_time=EXCLUDED.playing_time,
-                misc_stats=EXCLUDED.misc_stats,
                 scraped_at=NOW()
         """, (
             team_id, league_id, season_id, split,
