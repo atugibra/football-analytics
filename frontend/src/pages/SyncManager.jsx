@@ -84,13 +84,12 @@ export default function SyncManager() {
                     <AlertTriangle size={18} color="#f59e0b" /> Chrome Extension Setup
                 </h3>
                 <p style={{ fontSize: 14, color: 'var(--muted)', marginBottom: 12 }}>
-                    After deploying the API to Render.com, update one line in your extension:
+                    The extension is already configured to sync to the live Railway API:
                 </p>
                 <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: 16 }}>
-                    <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 6 }}>In <code>backend_sync.js</code> line 9, change:</div>
-                    <code style={{ fontSize: 13, color: '#fca5a5', display: 'block' }}>this.backendUrl = 'http://localhost:4000';</code>
-                    <div style={{ fontSize: 12, color: 'var(--muted)', margin: '8px 0 6px' }}>to:</div>
-                    <code style={{ fontSize: 13, color: '#86efac', display: 'block' }}>this.backendUrl = 'https://YOUR-APP.onrender.com';</code>
+                    <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 6 }}>Current setting in <code>backend_sync.js</code> line 9:</div>
+                    <code style={{ fontSize: 13, color: '#86efac', display: 'block' }}>this.backendUrl = 'https://football-analytics-production-5b3d.up.railway.app';</code>
+                    <div style={{ fontSize: 12, color: '#22c55e', marginTop: 8 }}>✅ Already pointing to Railway — no changes needed</div>
                 </div>
             </div>
 
