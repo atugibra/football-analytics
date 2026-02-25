@@ -16,6 +16,7 @@ export const getTeams = (params = {}) => req(`/api/teams?${new URLSearchParams(p
 export const getTeam = (id) => req(`/api/teams/${id}`);
 export const getH2H = (teamId, oppId) => req(`/api/teams/${teamId}/head-to-head/${oppId}`);
 export const getStandings = (params = {}) => req(`/api/standings?${new URLSearchParams(params)}`);
+export const getSeasons = (params = {}) => req(`/api/standings/seasons?${new URLSearchParams(params)}`);
 export const getSquadStats = (params = {}) => req(`/api/squad-stats?${new URLSearchParams(params)}`);
 export const getPlayers = (params = {}) => req(`/api/players?${new URLSearchParams(params)}`);
 export const getTopScorers = (params = {}) => req(`/api/players/top-scorers?${new URLSearchParams(params)}`);

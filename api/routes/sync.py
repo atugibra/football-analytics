@@ -155,8 +155,14 @@ def tables_to_player_stats(tables: List[TableData]) -> List[dict]:
 
 
 def detect_table_type(table: TableData) -> str:
-    """Detect if a table contains fixtures, player stats, or squad stats."""
+    """Detect if a table contains fixtures, player stats, squad stats, or standings."""
     headers_lower = [h.strip().lower() for h in table.headers]
+    # Standings: must have a rank/position column + points column + team column
+    has_rank   = any(h in headers_lower for h in ("rk", "rank", "pos", "#"))
+    has_pts    = any(h in headers_lower for h in ("pts", "points", "pt"))
+    has_squad  = any(h in headers_lower for h in ("squad", "team"))
+    if has_rank and has_pts and has_squad:
+        return "standings"
     if "home" in headers_lower or ("date" in headers_lower and "score" in headers_lower):
         return "fixtures"
     if "player" in headers_lower:
@@ -260,10 +266,14 @@ def sync_all(payload: SyncPayload):
         stats_list = payload.stats or []
         players_list = payload.playerStats or payload.player_stats or []
 
+        standings_list = []
+
         if payload.tables:
             for t in payload.tables:
                 ttype = detect_table_type(t)
-                if ttype == "fixtures":
+                if ttype == "standings":
+                    standings_list.extend(tables_to_standings([t]))
+                elif ttype == "fixtures":
                     fixtures_list.extend(tables_to_fixtures([t]))
                 elif ttype == "player_stats":
                     players_list.extend(tables_to_player_stats([t]))
@@ -273,11 +283,12 @@ def sync_all(payload: SyncPayload):
         fx  = _insert_fixtures(cur, league_id, season_id, payload.league, fixtures_list)
         st  = _insert_squad_stats(cur, league_id, season_id, stats_list)
         pl  = _insert_player_stats(cur, season_id, payload.league, players_list)
+        sd  = _insert_standings(cur, league_id, season_id, standings_list)
 
         conn.commit()
-        log_scrape(cur, league_id, season_id, "sync_all", fx + st + pl, 0)
+        log_scrape(cur, league_id, season_id, "sync_all", fx + st + pl + sd, 0)
         conn.commit()
-        return {"success": True, "fixtures_inserted": fx, "stats_inserted": st, "players_inserted": pl}
+        return {"success": True, "fixtures_inserted": fx, "stats_inserted": st, "players_inserted": pl, "standings_inserted": sd}
     except Exception as e:
         conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
@@ -342,6 +353,35 @@ def sync_player_stats(payload: SyncPayload):
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
+
+
+# ─── Standings row converter ─────────────────────────────────────────────────
+def tables_to_standings(tables: List[TableData]) -> List[dict]:
+    """Convert raw FBref standings tables into standings dicts."""
+    result = []
+    for table in tables:
+        headers = [h.strip().lower() for h in table.headers]
+        for row in table.rows:
+            if len(row) < 3:
+                continue
+            r = dict(zip(headers, row))
+            team = safe_text(r.get("squad", r.get("team", "")))
+            if not team or team.lower() in ("squad", "team", ""):
+                continue
+            result.append({
+                "rank":          safe_num(r.get("rk", r.get("rank", r.get("pos", r.get("#", None))))),
+                "team":          team,
+                "games":         safe_num(r.get("mp", r.get("games", r.get("pld", None)))),
+                "wins":          safe_num(r.get("w", r.get("wins", None))),
+                "ties":          safe_num(r.get("d", r.get("draws", r.get("ties", None)))),
+                "losses":        safe_num(r.get("l", r.get("losses", None))),
+                "goals_for":     safe_num(r.get("gf", r.get("goals_for", None))),
+                "goals_against": safe_num(r.get("ga", r.get("goals_against", None))),
+                "goal_diff":     safe_num(r.get("gd", r.get("goal_diff", None))),
+                "points":        safe_num(r.get("pts", r.get("points", r.get("pt", None)))),
+                "points_avg":    safe_num(r.get("pts/g", r.get("pts_avg", r.get("points_avg", None)))),
+            })
+    return result
 
 
 # ─── Internal insert helpers ─────────────────────────────────────────────────
@@ -443,6 +483,42 @@ def _insert_player_stats(cur, season_id, league_name, players):
             p.get("minutes"), p.get("minutes_90s"),
             p.get("goals"), p.get("assists"),
             json.dumps(p.get("standard_stats") or {})
+        ))
+        count += 1
+    return count
+
+
+def _insert_standings(cur, league_id, season_id, rows):
+    """Upsert rows into league_standings table."""
+    count = 0
+    for row in rows:
+        team_name = row.get("team", "")
+        if not team_name:
+            continue
+        team_id = get_or_create_team(cur, team_name, league_id)
+        cur.execute("""
+            INSERT INTO league_standings
+                (league_id, season_id, team_id, rank, games, wins, ties, losses,
+                 goals_for, goals_against, goal_diff, points, points_avg)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (team_id, league_id, season_id) DO UPDATE SET
+                rank          = EXCLUDED.rank,
+                games         = EXCLUDED.games,
+                wins          = EXCLUDED.wins,
+                ties          = EXCLUDED.ties,
+                losses        = EXCLUDED.losses,
+                goals_for     = EXCLUDED.goals_for,
+                goals_against = EXCLUDED.goals_against,
+                goal_diff     = EXCLUDED.goal_diff,
+                points        = EXCLUDED.points,
+                points_avg    = EXCLUDED.points_avg,
+                scraped_at    = NOW()
+        """, (
+            league_id, season_id, team_id,
+            row.get("rank"), row.get("games"),
+            row.get("wins"), row.get("ties"), row.get("losses"),
+            row.get("goals_for"), row.get("goals_against"), row.get("goal_diff"),
+            row.get("points"), row.get("points_avg")
         ))
         count += 1
     return count
