@@ -7,7 +7,7 @@ from database import get_connection
 router = APIRouter()
 
 # ─── Tables that reference league_id ─────────────────────────────────────────
-_LEAGUE_REF_TABLES = ["teams", "matches", "team_squad_stats", "player_stats", "scrape_log"]
+_LEAGUE_REF_TABLES = ["teams", "matches", "team_squad_stats", "scrape_log"]
 
 
 @router.post("/merge-duplicate-leagues")
@@ -42,13 +42,15 @@ def merge_duplicate_leagues():
             for dup_id in duplicates:
                 # Re-point every table that uses league_id
                 for tbl in _LEAGUE_REF_TABLES:
+                    cur.execute(f"SAVEPOINT sp_merge")
                     try:
                         cur.execute(
                             f"UPDATE {tbl} SET league_id = %s WHERE league_id = %s",
                             (canonical_id, dup_id)
                         )
+                        cur.execute("RELEASE SAVEPOINT sp_merge")
                     except Exception:
-                        pass  # table may not have league_id column
+                        cur.execute("ROLLBACK TO SAVEPOINT sp_merge")
 
                 # Also fix teams' league_id when the same team now appears twice under
                 # the canonical league – skip on conflict (team already exists there).
