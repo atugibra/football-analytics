@@ -101,18 +101,19 @@ def tables_to_fixtures(tables: List[TableData]) -> List[dict]:
             away = safe_text(r.get("away_team", r.get("away", r.get("away team", ""))))
             if not home or not away or home.lower() in ("home", "home_team", ""):
                 continue
+            # Apply safe_text to ALL fields — any FBref cell with a hyperlink returns a dict
             result.append({
                 "home_team":  home,
                 "away_team":  away,
-                "date":       r.get("date", r.get("dates", "")),
-                "start_time": r.get("start_time", r.get("time", "")),
-                "score":      r.get("score", ""),
-                "gameweek":   r.get("gameweek", r.get("wk", r.get("round", ""))),
-                "dayofweek":  r.get("dayofweek", r.get("day", "")),
-                "venue":      r.get("venue", ""),
-                "attendance": r.get("attendance", ""),
-                "referee":    r.get("referee", ""),
-                "round":      r.get("round", r.get("gameweek", "")),
+                "date":       safe_text(r.get("date", r.get("dates", ""))),
+                "start_time": safe_text(r.get("start_time", r.get("time", ""))),
+                "score":      safe_text(r.get("score", "")),       # score cell links to match report
+                "gameweek":   safe_text(r.get("gameweek", r.get("wk", r.get("round", "")))),
+                "dayofweek":  safe_text(r.get("dayofweek", r.get("day", ""))),
+                "venue":      safe_text(r.get("venue", "")),        # venue cell has a link
+                "attendance": safe_num(r.get("attendance", None)),  # integer column — convert now
+                "referee":    safe_text(r.get("referee", "")),      # referee cell has a link
+                "round":      safe_text(r.get("round", r.get("gameweek", ""))),
             })
     return result
 
@@ -456,13 +457,16 @@ def _insert_fixtures(cur, league_id, season_id, league_name, fixtures):
                 away_score=EXCLUDED.away_score,
                 score_raw=EXCLUDED.score_raw,
                 attendance=EXCLUDED.attendance,
+                venue=EXCLUDED.venue,
+                referee=EXCLUDED.referee,
                 updated_at=NOW()
         """, (
             league_id, season_id, home_id, away_id,
-            f.get("gameweek"), f.get("dayofweek"),
-            match_date, f.get("start_time"),
-            home_score, away_score, f.get("score"),
-            f.get("attendance"), f.get("venue"), f.get("referee"), f.get("round")
+            safe_num(f.get("gameweek")),    safe_num(f.get("dayofweek")),
+            match_date,                     safe_text(f.get("start_time", "")),
+            home_score, away_score,         safe_text(f.get("score", "")),
+            safe_num(f.get("attendance")),  safe_text(f.get("venue", "")),
+            safe_text(f.get("referee", "")), safe_text(f.get("round", ""))
         ))
         count += 1
     return count
