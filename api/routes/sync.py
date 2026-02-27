@@ -463,7 +463,7 @@ def _insert_fixtures(cur, league_id, season_id, league_name, fixtures):
         """, (
             league_id, season_id, home_id, away_id,
             safe_num(f.get("gameweek")),    safe_num(f.get("dayofweek")),
-            match_date,                     safe_text(f.get("start_time", "")),
+            match_date,                     safe_text(f.get("start_time", "")) or None,
             home_score, away_score,         safe_text(f.get("score", "")),
             safe_num(f.get("attendance")),  safe_text(f.get("venue", "")),
             safe_text(f.get("referee", "")), safe_text(f.get("round", ""))
