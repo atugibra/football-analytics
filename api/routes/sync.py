@@ -48,7 +48,7 @@ def trunc(val, max_len: int) -> str:
                 """
         if val is None:
                     return None
-                s = str(val).strip()
+           s = str(val).strip()
     return s[:max_len] if s else None
 
 
