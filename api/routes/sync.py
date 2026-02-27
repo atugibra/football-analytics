@@ -42,6 +42,27 @@ def safe_text(val):
     return s
 
 
+def safe_age_int(val):
+    """Convert FBref age/birth_year to an integer.
+    Handles formats:
+      '27-116' (years-days display)  → 27
+      '27.317' (csk decimal years)   → 27
+      '2000'   (birth year)          → 2000
+    """
+    if val is None:
+        return None
+    # Unwrap link-cell dicts first
+    s = safe_text(val) if isinstance(val, dict) else str(val).strip()
+    # Strip leading zeros, commas, spaces
+    s = s.replace(",", "").strip()
+    # Take integer part only (before '-' for "27-116" or '.' for "27.317")
+    s = s.split("-")[0].split(".")[0].strip()
+    try:
+        return int(s) if s else None
+    except (ValueError, TypeError):
+        return None
+
+
 router = APIRouter()
 
 # ─── Pydantic models ─────────────────────────────────────────────────────────
@@ -139,22 +160,24 @@ def tables_to_player_stats(tables: List[TableData]) -> List[dict]:
             if not name or name.lower() in ("player", ""):
                 continue
             extra = {k: v for k, v in r.items() if k not in ("player",)}
-            # nationality: FBref display text = "ci CIV" (flag code + ISO); keep just the ISO code
-            raw_nat = str(r.get("nationality", r.get("nation", "")) or "").strip()
+            # nationality: FBref cell has a link → arrives as dict; safe_text unwraps it
+            # Display text = "ci CIV" (flag code + ISO) — keep just the ISO code
+            raw_nat = safe_text(r.get("nationality", r.get("nation", "")) or "").strip()
             nationality = raw_nat.split()[-1] if raw_nat else ""
             result.append({
                 "player":        name,
                 "nationality":   nationality,
                 "position":      safe_text(r.get("position", r.get("pos", ""))),
                 "team":          safe_text(r.get("team", r.get("squad", ""))),
-                "age":           r.get("age", None),
-                "birth_year":    r.get("birth_year", r.get("born", None)),
-                "games":         r.get("games", r.get("mp", None)),
-                "games_starts":  r.get("games_starts", r.get("starts", None)),
-                "minutes":       r.get("minutes", r.get("min", None)),
-                "minutes_90s":   r.get("minutes_90s", r.get("90s", None)),
-                "goals":         r.get("goals", r.get("gls", None)),
-                "assists":       r.get("assists", r.get("ast", None)),
+                # FBref age: display='27-116' (years-days), csk='27.317' — extract year only
+                "age":           safe_age_int(r.get("age", None)),
+                "birth_year":    safe_age_int(r.get("birth_year", r.get("born", None))),
+                "games":         safe_num(r.get("games", r.get("mp", None))),
+                "games_starts":  safe_num(r.get("games_starts", r.get("starts", None))),
+                "minutes":       safe_num(r.get("minutes", r.get("min", None))),
+                "minutes_90s":   safe_num(r.get("minutes_90s", r.get("90s", None))),
+                "goals":         safe_num(r.get("goals", r.get("gls", None))),
+                "assists":       safe_num(r.get("assists", r.get("ast", None))),
                 "standard_stats": extra,
             })
     return result
@@ -503,12 +526,18 @@ def _insert_player_stats(cur, season_id, league_name, players):
                 standard_stats=EXCLUDED.standard_stats,
                 scraped_at=NOW()
         """, (
-            name, p.get("nationality"), p.get("position"),
+            name,
+            safe_text(p.get("nationality", "")),   # guard: ensure string
+            safe_text(p.get("position", "")),       # guard: ensure string
             team_id, season_id,
-            p.get("age"), p.get("birth_year"),
-            p.get("games"), p.get("games_starts"),
-            p.get("minutes"), p.get("minutes_90s"),
-            p.get("goals"), p.get("assists"),
+            safe_age_int(p.get("age")),             # guard: '27-116' → 27
+            safe_age_int(p.get("birth_year")),      # guard: '2000' → 2000
+            safe_num(p.get("games")),
+            safe_num(p.get("games_starts")),
+            safe_num(p.get("minutes")),
+            safe_num(p.get("minutes_90s")),
+            safe_num(p.get("goals")),
+            safe_num(p.get("assists")),
             json.dumps(p.get("standard_stats") or {})
         ))
         count += 1
