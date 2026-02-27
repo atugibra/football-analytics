@@ -22,15 +22,12 @@ def safe_num(val):
 
 
 def safe_text(val):
-    """Extract plain text from a value that may be a dict/link object or plain string.
-    FBref cells often come as {"link": "...", "text": "Team Name"} — extract text.
-    """
+    """Extract plain text from a value that may be a dict/link object or plain string."""
     if val is None:
         return ""
     if isinstance(val, dict):
         return str(val.get("text", val.get("name", ""))).strip()
     s = str(val).strip()
-    # Handle Python-stringified dicts like "{'link': '...', 'text': 'Team'}"
     if s.startswith("{") and ("'text'" in s or '"text"' in s):
         try:
             import ast
@@ -42,31 +39,20 @@ def safe_text(val):
     return s
 
 
-def trunc(val, max_len: int) -> str:
-        """Cap a string to max_len to respect VARCHAR column limits.
-            Returns None for empty/None values so DB NULLs are preserved.
-                """
-        if val is None:
-                    return None
-           s = str(val).strip()
+def trunc(val, max_len: int):
+    """Cap a string to max_len to respect VARCHAR column limits."""
+    if val is None:
+        return None
+    s = str(val).strip()
     return s[:max_len] if s else None
 
 
-
 def safe_age_int(val):
-    """Convert FBref age/birth_year to an integer.
-    Handles formats:
-      '27-116' (years-days display)  → 27
-      '27.317' (csk decimal years)   → 27
-      '2000'   (birth year)          → 2000
-    """
+    """Convert FBref age/birth_year to an integer."""
     if val is None:
         return None
-    # Unwrap link-cell dicts first
     s = safe_text(val) if isinstance(val, dict) else str(val).strip()
-    # Strip leading zeros, commas, spaces
     s = s.replace(",", "").strip()
-    # Take integer part only (before '-' for "27-116" or '.' for "27.317")
     s = s.split("-")[0].split(".")[0].strip()
     try:
         return int(s) if s else None
@@ -76,30 +62,21 @@ def safe_age_int(val):
 
 router = APIRouter()
 
-# ─── Pydantic models ─────────────────────────────────────────────────────────
 class TableData(BaseModel):
     headers: List[str] = []
     rows: List[List[Any]] = []
     rowCount: Optional[int] = None
 
 class SyncPayload(BaseModel):
-    """Flexible payload - accepts raw tables (from extension) OR pre-processed lists"""
     league: str
     season: str
-    # Raw table format (from Chrome extension)
     tables: Optional[List[TableData]] = None
-    # Pre-processed format (from Excel importer)
     fixtures: Optional[List[dict]] = None
     stats: Optional[List[dict]] = None
     player_stats: Optional[List[dict]] = None
     playerStats: Optional[List[dict]] = None
 
-# ─── Raw table → dict converters ─────────────────────────────────────────────
-def tables_to_fixtures(tables: List[TableData]) -> List[dict]:
-    """Convert raw scraped fixture tables into fixture dicts.
-    FBref uses data-stat attribute names as headers:
-      home_team, away_team, date, start_time, score, gameweek, dayofweek, venue, attendance, referee
-    """
+def tables_to_fixtures(tables):
     result = []
     for table in tables:
         headers = [h.strip().lower() for h in table.headers]
@@ -107,30 +84,27 @@ def tables_to_fixtures(tables: List[TableData]) -> List[dict]:
             if len(row) < 3:
                 continue
             r = dict(zip(headers, row))
-            # Priority: data-stat names first, then legacy display-text names
             home = safe_text(r.get("home_team", r.get("home", r.get("home team", ""))))
             away = safe_text(r.get("away_team", r.get("away", r.get("away team", ""))))
             if not home or not away or home.lower() in ("home", "home_team", ""):
                 continue
-            # Apply safe_text to ALL fields — any FBref cell with a hyperlink returns a dict
             result.append({
                 "home_team":  home,
                 "away_team":  away,
                 "date":       safe_text(r.get("date", r.get("dates", ""))),
                 "start_time": safe_text(r.get("start_time", r.get("time", ""))),
-                                "score":      trunc(safe_text(r.get("score", "")), 30),       # VARCHAR(30)
+                "score":      trunc(safe_text(r.get("score", "")), 30),
                 "gameweek":   safe_text(r.get("gameweek", r.get("wk", r.get("round", "")))),
                 "dayofweek":  safe_text(r.get("dayofweek", r.get("day", ""))),
-                "venue":      safe_text(r.get("venue", "")),        # venue cell has a link
-                "attendance": safe_num(r.get("attendance", None)),  # integer column — convert now
-                "referee":    safe_text(r.get("referee", "")),      # referee cell has a link
-                                "round":      trunc(safe_text(r.get("round", r.get("gameweek", ""))), 100),  # widened
+                "venue":      safe_text(r.get("venue", "")),
+                "attendance": safe_num(r.get("attendance", None)),
+                "referee":    safe_text(r.get("referee", "")),
+                "round":      trunc(safe_text(r.get("round", r.get("gameweek", ""))), 100),
             })
     return result
 
 
-def tables_to_squad_stats(tables: List[TableData]) -> List[dict]:
-    """Convert raw scraped squad stats tables into stat dicts."""
+def tables_to_squad_stats(tables):
     result = []
     for table in tables:
         headers = [h.strip().lower() for h in table.headers]
@@ -141,7 +115,6 @@ def tables_to_squad_stats(tables: List[TableData]) -> List[dict]:
             team = safe_text(r.get("squad", r.get("team", "")))
             if not team or team.lower() in ("squad", "team", ""):
                 continue
-            # Put everything else into standard_stats JSONB
             extra = {k: v for k, v in r.items() if k not in ("squad", "team")}
             result.append({
                 "team": team,
@@ -159,8 +132,7 @@ def tables_to_squad_stats(tables: List[TableData]) -> List[dict]:
     return result
 
 
-def tables_to_player_stats(tables: List[TableData]) -> List[dict]:
-    """Convert raw scraped player tables into player stat dicts."""
+def tables_to_player_stats(tables):
     result = []
     for table in tables:
         headers = [h.strip().lower() for h in table.headers]
@@ -172,16 +144,13 @@ def tables_to_player_stats(tables: List[TableData]) -> List[dict]:
             if not name or name.lower() in ("player", ""):
                 continue
             extra = {k: v for k, v in r.items() if k not in ("player",)}
-            # nationality: FBref cell has a link → arrives as dict; safe_text unwraps it
-            # Display text = "ci CIV" (flag code + ISO) — keep just the ISO code
             raw_nat = safe_text(r.get("nationality", r.get("nation", "")) or "").strip()
             nationality = raw_nat.split()[-1] if raw_nat else ""
             result.append({
                 "player":        name,
-                                "nationality":   trunc(nationality, 10),       # 'ENG' / 'GER' 
-                                "position":      trunc(safe_text(r.get("position", r.get("pos", ""))), 20),  # 'MF,FW,DF'
+                "nationality":   trunc(nationality, 10),
+                "position":      trunc(safe_text(r.get("position", r.get("pos", ""))), 20),
                 "team":          safe_text(r.get("team", r.get("squad", ""))),
-                # FBref age: display='27-116' (years-days), csk='27.317' — extract year only
                 "age":           safe_age_int(r.get("age", None)),
                 "birth_year":    safe_age_int(r.get("birth_year", r.get("born", None))),
                 "games":         safe_num(r.get("games", r.get("mp", None))),
@@ -195,46 +164,25 @@ def tables_to_player_stats(tables: List[TableData]) -> List[dict]:
     return result
 
 
-def detect_table_type(table: TableData) -> str:
-    """Detect table type from FBref data-stat headers.
-
-    FBref actual data-stat header names (used by content_scraper.js):
-      Standings : rank, team, games, wins, ties, losses, goals_for, goals_against, goal_diff, points
-      Fixtures  : date, home_team, away_team, score, gameweek, dayofweek, start_time
-      Squad stats: team, players_used, avg_age, possession, goals, assists …
-      Player stats: player, nationality, position, team, age …
-    """
+def detect_table_type(table):
     headers_lower = [h.strip().lower() for h in table.headers]
-
-    # ── Standings ─────────────────────────────────────────────────────────────
-    # Exact rank column + exact points column + team column
-    # Deliberately strict to avoid matching the home/away split table
     has_rank  = "rank" in headers_lower or "rk" in headers_lower
     has_pts   = "points" in headers_lower or "pts" in headers_lower
     has_squad = "team" in headers_lower or "squad" in headers_lower
-    # Extra guard: real standings have wins/losses; home-split table starts with home_games
     has_wins  = "wins" in headers_lower or "w" in headers_lower
     if has_rank and has_pts and has_squad and has_wins:
         return "standings"
-
-    # ── Fixtures ──────────────────────────────────────────────────────────────
-    # data-stat: home_team (not "home") + date + score
     has_home_team = "home_team" in headers_lower or "home" in headers_lower
     has_date      = "date" in headers_lower
     has_score     = "score" in headers_lower
     if has_home_team or (has_date and has_score):
         return "fixtures"
-
-    # ── Player stats ──────────────────────────────────────────────────────────
     if "player" in headers_lower:
         return "player_stats"
-
     return "squad_stats"
 
 
-# ─── Helpers ─────────────────────────────────────────────────────────────────
-def get_or_create(cur, table, unique_cols: dict, extra_cols: dict = {}):
-    """Generic exact-match get-or-create (kept for backward compat)."""
+def get_or_create(cur, table, unique_cols, extra_cols={}):
     where = " AND ".join(f"{k}=%s" for k in unique_cols)
     cur.execute(f"SELECT id FROM {table} WHERE {where}", list(unique_cols.values()))
     row = cur.fetchone()
@@ -247,13 +195,10 @@ def get_or_create(cur, table, unique_cols: dict, extra_cols: dict = {}):
     return cur.fetchone()["id"]
 
 
-def get_or_create_league(cur, name: str) -> int:
-    """Case-insensitive league lookup. Normalises to title-case on insert.
-    Raises ValueError if name is a bare year (e.g. '2025').
-    """
+def get_or_create_league(cur, name):
     clean = name.strip()
     if clean.isdigit():
-        raise ValueError(f"Invalid league name '{clean}' — looks like a year, not a league.")
+        raise ValueError(f"Invalid league name '{clean}'")
     cur.execute("SELECT id FROM leagues WHERE name ILIKE %s LIMIT 1", (clean,))
     row = cur.fetchone()
     if row:
@@ -263,8 +208,7 @@ def get_or_create_league(cur, name: str) -> int:
     return cur.fetchone()["id"]
 
 
-def get_or_create_season(cur, name: str) -> int:
-    """Case-insensitive season lookup."""
+def get_or_create_season(cur, name):
     clean = name.strip()
     cur.execute("SELECT id FROM seasons WHERE name ILIKE %s LIMIT 1", (clean,))
     row = cur.fetchone()
@@ -274,27 +218,20 @@ def get_or_create_season(cur, name: str) -> int:
     return cur.fetchone()["id"]
 
 
-def get_or_create_team(cur, name: str, league_id: int) -> int:
-    """Case-insensitive team lookup within a league."""
+def get_or_create_team(cur, name, league_id):
     clean = safe_text(name) or name.strip()
-    cur.execute(
-        "SELECT id FROM teams WHERE name ILIKE %s AND league_id = %s LIMIT 1",
-        (clean, league_id)
-    )
+    cur.execute("SELECT id FROM teams WHERE name ILIKE %s AND league_id = %s LIMIT 1", (clean, league_id))
     row = cur.fetchone()
     if row:
         return row["id"]
-    cur.execute(
-        "INSERT INTO teams (name, league_id) VALUES (%s, %s) RETURNING id",
-        (clean, league_id)
-    )
+    cur.execute("INSERT INTO teams (name, league_id) VALUES (%s, %s) RETURNING id", (clean, league_id))
     return cur.fetchone()["id"]
 
 
-def parse_score(score_raw: str):
+def parse_score(score_raw):
     if not score_raw or str(score_raw).strip() in ("", "nan", "None"):
         return None, None
-    cleaned = re.sub(r"\s*\(.*?\)", "", str(score_raw)).strip()
+    cleaned = re.sub(r"s*(.*?)", "", str(score_raw)).strip()
     for sep in ["–", "-", "—"]:
         if sep in cleaned:
             parts = cleaned.split(sep)
@@ -314,7 +251,6 @@ def parse_date(raw):
     return s[:10]
 
 
-# ─── Sync endpoint (used by Chrome extension AND importer) ───────────────────
 @router.post("/all")
 def sync_all(payload: SyncPayload):
     conn = get_connection()
@@ -322,14 +258,10 @@ def sync_all(payload: SyncPayload):
     try:
         league_id = get_or_create_league(cur, payload.league)
         season_id = get_or_create_season(cur, payload.season)
-
-        # If extension sent raw tables, classify and convert them
         fixtures_list = payload.fixtures or []
         stats_list = payload.stats or []
         players_list = payload.playerStats or payload.player_stats or []
-
         standings_list = []
-
         if payload.tables:
             for t in payload.tables:
                 ttype = detect_table_type(t)
@@ -341,12 +273,10 @@ def sync_all(payload: SyncPayload):
                     players_list.extend(tables_to_player_stats([t]))
                 else:
                     stats_list.extend(tables_to_squad_stats([t]))
-
         fx  = _insert_fixtures(cur, league_id, season_id, payload.league, fixtures_list)
         st  = _insert_squad_stats(cur, league_id, season_id, stats_list)
         pl  = _insert_player_stats(cur, season_id, payload.league, players_list)
         sd  = _insert_standings(cur, league_id, season_id, standings_list)
-
         conn.commit()
         log_scrape(cur, league_id, season_id, "sync_all", fx + st + pl + sd, 0)
         conn.commit()
@@ -417,9 +347,7 @@ def sync_player_stats(payload: SyncPayload):
         conn.close()
 
 
-# ─── Standings row converter ─────────────────────────────────────────────────
-def tables_to_standings(tables: List[TableData]) -> List[dict]:
-    """Convert raw FBref standings tables into standings dicts."""
+def tables_to_standings(tables):
     result = []
     for table in tables:
         headers = [h.strip().lower() for h in table.headers]
@@ -446,7 +374,6 @@ def tables_to_standings(tables: List[TableData]) -> List[dict]:
     return result
 
 
-# ─── Internal insert helpers ─────────────────────────────────────────────────
 def _insert_fixtures(cur, league_id, season_id, league_name, fixtures):
     count = 0
     for f in fixtures:
@@ -542,11 +469,11 @@ def _insert_player_stats(cur, season_id, league_name, players):
                 scraped_at=NOW()
         """, (
             name,
-            safe_text(p.get("nationality", "")),   # guard: ensure string
-            safe_text(p.get("position", "")),       # guard: ensure string
+            safe_text(p.get("nationality", "")),
+            safe_text(p.get("position", "")),
             team_id, season_id,
-            safe_age_int(p.get("age")),             # guard: '27-116' → 27
-            safe_age_int(p.get("birth_year")),      # guard: '2000' → 2000
+            safe_age_int(p.get("age")),
+            safe_age_int(p.get("birth_year")),
             safe_num(p.get("games")),
             safe_num(p.get("games_starts")),
             safe_num(p.get("minutes")),
@@ -560,7 +487,6 @@ def _insert_player_stats(cur, season_id, league_name, players):
 
 
 def _insert_standings(cur, league_id, season_id, rows):
-    """Upsert rows into league_standings table."""
     count = 0
     for row in rows:
         team_name = row.get("team", "")
@@ -596,11 +522,10 @@ def _insert_standings(cur, league_id, season_id, rows):
 
 
 def log_scrape(cur, league_id, season_id, page_type, inserted, updated):
-    """Write an audit row to scrape_log. Never raises — logging must not block syncs."""
     try:
         cur.execute("""
             INSERT INTO scrape_log (league_id, season_id, page_type, rows_inserted, rows_updated)
             VALUES (%s, %s, %s, %s, %s)
         """, (league_id, season_id, page_type, inserted, updated))
     except Exception:
-        pass  # Logging failure must never block a sync
+        pass
