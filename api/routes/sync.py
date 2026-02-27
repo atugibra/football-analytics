@@ -42,6 +42,17 @@ def safe_text(val):
     return s
 
 
+def trunc(val, max_len: int) -> str:
+        """Cap a string to max_len to respect VARCHAR column limits.
+            Returns None for empty/None values so DB NULLs are preserved.
+                """
+        if val is None:
+                    return None
+                s = str(val).strip()
+    return s[:max_len] if s else None
+
+
+
 def safe_age_int(val):
     """Convert FBref age/birth_year to an integer.
     Handles formats:
@@ -107,13 +118,13 @@ def tables_to_fixtures(tables: List[TableData]) -> List[dict]:
                 "away_team":  away,
                 "date":       safe_text(r.get("date", r.get("dates", ""))),
                 "start_time": safe_text(r.get("start_time", r.get("time", ""))),
-                "score":      safe_text(r.get("score", "")),       # score cell links to match report
+                                "score":      trunc(safe_text(r.get("score", "")), 30),       # VARCHAR(30)
                 "gameweek":   safe_text(r.get("gameweek", r.get("wk", r.get("round", "")))),
                 "dayofweek":  safe_text(r.get("dayofweek", r.get("day", ""))),
                 "venue":      safe_text(r.get("venue", "")),        # venue cell has a link
                 "attendance": safe_num(r.get("attendance", None)),  # integer column — convert now
                 "referee":    safe_text(r.get("referee", "")),      # referee cell has a link
-                "round":      safe_text(r.get("round", r.get("gameweek", ""))),
+                                "round":      trunc(safe_text(r.get("round", r.get("gameweek", ""))), 100),  # widened
             })
     return result
 
@@ -167,8 +178,8 @@ def tables_to_player_stats(tables: List[TableData]) -> List[dict]:
             nationality = raw_nat.split()[-1] if raw_nat else ""
             result.append({
                 "player":        name,
-                "nationality":   nationality,
-                "position":      safe_text(r.get("position", r.get("pos", ""))),
+                                "nationality":   trunc(nationality, 10),       # 'ENG' / 'GER' 
+                                "position":      trunc(safe_text(r.get("position", r.get("pos", ""))), 20),  # 'MF,FW,DF'
                 "team":          safe_text(r.get("team", r.get("squad", ""))),
                 # FBref age: display='27-116' (years-days), csk='27.317' — extract year only
                 "age":           safe_age_int(r.get("age", None)),
