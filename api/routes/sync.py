@@ -139,19 +139,22 @@ def tables_to_player_stats(tables: List[TableData]) -> List[dict]:
             if not name or name.lower() in ("player", ""):
                 continue
             extra = {k: v for k, v in r.items() if k not in ("player",)}
+            # nationality: FBref display text = "ci CIV" (flag code + ISO); keep just the ISO code
+            raw_nat = str(r.get("nationality", r.get("nation", "")) or "").strip()
+            nationality = raw_nat.split()[-1] if raw_nat else ""
             result.append({
-                "player": name,
-                "nationality": r.get("nation", r.get("nationality", "")),
-                "position": r.get("pos", r.get("position", "")),
-                "team": r.get("squad", r.get("team", "")),
-                "age": r.get("age", None),
-                "birth_year": r.get("born", r.get("birth_year", None)),
-                "games": r.get("mp", r.get("games", None)),
-                "games_starts": r.get("starts", None),
-                "minutes": r.get("min", r.get("minutes", None)),
-                "minutes_90s": r.get("90s", None),
-                "goals": r.get("gls", r.get("goals", None)),
-                "assists": r.get("ast", r.get("assists", None)),
+                "player":        name,
+                "nationality":   nationality,
+                "position":      safe_text(r.get("position", r.get("pos", ""))),
+                "team":          safe_text(r.get("team", r.get("squad", ""))),
+                "age":           r.get("age", None),
+                "birth_year":    r.get("birth_year", r.get("born", None)),
+                "games":         r.get("games", r.get("mp", None)),
+                "games_starts":  r.get("games_starts", r.get("starts", None)),
+                "minutes":       r.get("minutes", r.get("min", None)),
+                "minutes_90s":   r.get("minutes_90s", r.get("90s", None)),
+                "goals":         r.get("goals", r.get("gls", None)),
+                "assists":       r.get("assists", r.get("ast", None)),
                 "standard_stats": extra,
             })
     return result
@@ -549,7 +552,11 @@ def _insert_standings(cur, league_id, season_id, rows):
 
 
 def log_scrape(cur, league_id, season_id, page_type, inserted, updated):
-    cur.execute("""
-        INSERT INTO scrape_log (league_id, season_id, page_type, rows_inserted, rows_updated)
-        VALUES (%s, %s, %s, %s, %s)
-    """, (league_id, season_id, page_type, inserted, updated))
+    """Write an audit row to scrape_log. Never raises — logging must not block syncs."""
+    try:
+        cur.execute("""
+            INSERT INTO scrape_log (league_id, season_id, page_type, rows_inserted, rows_updated)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (league_id, season_id, page_type, inserted, updated))
+    except Exception:
+        pass  # Logging failure must never block a sync
