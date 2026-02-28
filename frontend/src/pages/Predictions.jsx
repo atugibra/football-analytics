@@ -2,9 +2,10 @@ import { useState } from 'react';
 import { TrendingUp, Zap } from 'lucide-react';
 import { getTeams } from '../api';
 import { useEffect } from 'react';
-
-const API = import.meta.env.VITE_API_URL || 'http://localhost:4000';
-
+let API = import.meta.env.VITE_API_URL || 'https://football-analytics-production-5b3d.up.railway.app';
+if (API.startsWith('http://') && !API.includes('localhost')) {
+        API = API.replace('http://', 'https://');
+}
 export default function Predictions() {
     const [teams, setTeams] = useState([]);
     const [home, setHome] = useState('');
