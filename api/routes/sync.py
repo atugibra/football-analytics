@@ -5,7 +5,6 @@ from pydantic import BaseModel
 from typing import List, Optional, Any
 from database import get_connection
 
-
 def safe_num(val):
     """Safely convert FBref values to a number, returning None for non-numeric."""
     if val is None:
@@ -20,8 +19,6 @@ def safe_num(val):
             return float(s)
         except ValueError:
             return None
-
-
 
 
 def safe_text(val):
@@ -42,16 +39,12 @@ def safe_text(val):
     return s
 
 
-
-
 def trunc(val, max_len: int):
     """Cap a string to max_len to respect VARCHAR column limits."""
     if val is None:
         return None
     s = str(val).strip()
     return s[:max_len] if s else None
-
-
 
 
 def safe_age_int(val):
@@ -67,3 +60,472 @@ def safe_age_int(val):
         return None
 
 
+router = APIRouter()
+
+class TableData(BaseModel):
+    headers: List[str] = []
+    rows: List[List[Any]] = []
+    rowCount: Optional[int] = None
+
+class SyncPayload(BaseModel):
+    league: str
+    season: str
+    tables: Optional[List[TableData]] = None
+    fixtures: Optional[List[dict]] = None
+    stats: Optional[List[dict]] = None
+    player_stats: Optional[List[dict]] = None
+    playerStats: Optional[List[dict]] = None
+
+def tables_to_fixtures(tables):
+    result = []
+    for table in tables:
+        headers = [h.strip().lower() for h in table.headers]
+        for row in table.rows:
+            if len(row) < 3:
+                continue
+            r = dict(zip(headers, row))
+            home = safe_text(r.get("home_team", r.get("home", r.get("home team", ""))))
+            away = safe_text(r.get("away_team", r.get("away", r.get("away team", ""))))
+            if not home or not away or home.lower() in ("home", "home_team", ""):
+                continue
+            result.append({
+                "home_team":  home,
+                "away_team":  away,
+                "date":       safe_text(r.get("date", r.get("dates", ""))),
+                "start_time": safe_text(r.get("start_time", r.get("time", ""))),
+                "score":      trunc(safe_text(r.get("score", "")), 30),
+                "gameweek":   safe_text(r.get("gameweek", r.get("wk", r.get("round", "")))),
+                "dayofweek":  safe_text(r.get("dayofweek", r.get("day", ""))),
+                "venue":      safe_text(r.get("venue", "")),
+                "attendance": safe_num(r.get("attendance", None)),
+                "referee":    safe_text(r.get("referee", "")),
+                "round":      trunc(safe_text(r.get("round", r.get("gameweek", ""))), 100),
+            })
+    return result
+
+
+def tables_to_squad_stats(tables):
+    result = []
+    for table in tables:
+        headers = [h.strip().lower() for h in table.headers]
+        for row in table.rows:
+            if len(row) < 2:
+                continue
+            r = dict(zip(headers, row))
+            team = safe_text(r.get("squad", r.get("team", "")))
+            if not team or team.lower() in ("squad", "team", ""):
+                continue
+            extra = {k: v for k, v in r.items() if k not in ("squad", "team")}
+            result.append({
+                "team": team,
+                "players_used": r.get("# pl", r.get("players used", r.get("players_used", None))),
+                "avg_age": r.get("age", r.get("avg age", None)),
+                "possession": r.get("poss", r.get("possession", None)),
+                "games": r.get("mp", r.get("games", None)),
+                "games_starts": r.get("starts", r.get("games_starts", None)),
+                "minutes": r.get("min", r.get("minutes", None)),
+                "minutes_90s": r.get("90s", r.get("minutes_90s", None)),
+                "goals": r.get("gls", r.get("goals", None)),
+                "assists": r.get("ast", r.get("assists", None)),
+                "standard_stats": extra,
+            })
+    return result
+
+
+def tables_to_player_stats(tables):
+    result = []
+    for table in tables:
+        headers = [h.strip().lower() for h in table.headers]
+        for row in table.rows:
+            if len(row) < 2:
+                continue
+            r = dict(zip(headers, row))
+            name = safe_text(r.get("player", ""))
+            if not name or name.lower() in ("player", ""):
+                continue
+            extra = {k: v for k, v in r.items() if k not in ("player",)}
+            raw_nat = safe_text(r.get("nationality", r.get("nation", "")) or "").strip()
+            nationality = raw_nat.split()[-1] if raw_nat else ""
+            result.append({
+                "player":        name,
+                "nationality":   trunc(nationality, 10),
+                "position":      trunc(safe_text(r.get("position", r.get("pos", ""))), 20),
+                "team":          safe_text(r.get("team", r.get("squad", ""))),
+                "age":           safe_age_int(r.get("age", None)),
+                "birth_year":    safe_age_int(r.get("birth_year", r.get("born", None))),
+                "games":         safe_num(r.get("games", r.get("mp", None))),
+                "games_starts":  safe_num(r.get("games_starts", r.get("starts", None))),
+                "minutes":       safe_num(r.get("minutes", r.get("min", None))),
+                "minutes_90s":   safe_num(r.get("minutes_90s", r.get("90s", None))),
+                "goals":         safe_num(r.get("goals", r.get("gls", None))),
+                "assists":       safe_num(r.get("assists", r.get("ast", None))),
+                "standard_stats": extra,
+            })
+    return result
+
+
+def detect_table_type(table):\n    headers_lower = [h.strip().lower() for h in table.headers]\n    headers_set   = set(headers_lower)\n\n    # -- Home/Away split table (Table 2 on FBref stats pages) ---\n    if ("home_games" in headers_set or "home_wins" in headers_set) and \\n       ("rank" in headers_set or "rk" in headers_set) and \\n       ("team" in headers_set or "squad" in headers_set):\n        return "standings_home_away"\n
+    headers_lower = [h.strip().lower() for h in table.headers]
+    has_rank  = "rank" in headers_lower or "rk" in headers_lower
+    has_pts   = "points" in headers_lower or "pts" in headers_lower
+    has_squad = "team" in headers_lower or "squad" in headers_lower
+    has_wins  = "wins" in headers_lower or "w" in headers_lower
+    if has_rank and has_pts and has_squad and has_wins:
+        return "standings"
+    has_home_team = "home_team" in headers_lower or "home" in headers_lower
+    has_date      = "date" in headers_lower
+    has_score     = "score" in headers_lower
+    if has_home_team or (has_date and has_score):
+        return "fixtures"
+    if "player" in headers_lower:
+        return "player_stats"
+    return "squad_stats"
+
+
+def get_or_create(cur, table, unique_cols, extra_cols={}):
+    where = " AND ".join(f"{k}=%s" for k in unique_cols)
+    cur.execute(f"SELECT id FROM {table} WHERE {where}", list(unique_cols.values()))
+    row = cur.fetchone()
+    if row:
+        return row["id"]
+    all_cols = {**unique_cols, **extra_cols}
+    cols = ", ".join(all_cols.keys())
+    placeholders = ", ".join(["%s"] * len(all_cols))
+    cur.execute(f"INSERT INTO {table} ({cols}) VALUES ({placeholders}) RETURNING id", list(all_cols.values()))
+    return cur.fetchone()["id"]
+
+
+def get_or_create_league(cur, name):
+    clean = name.strip()
+    if clean.isdigit():
+        raise ValueError(f"Invalid league name '{clean}'")
+    cur.execute("SELECT id FROM leagues WHERE name ILIKE %s LIMIT 1", (clean,))
+    row = cur.fetchone()
+    if row:
+        return row["id"]
+    normalized = clean.title()
+    cur.execute("INSERT INTO leagues (name) VALUES (%s) RETURNING id", (normalized,))
+    return cur.fetchone()["id"]
+
+
+def get_or_create_season(cur, name):
+    clean = name.strip()
+    cur.execute("SELECT id FROM seasons WHERE name ILIKE %s LIMIT 1", (clean,))
+    row = cur.fetchone()
+    if row:
+        return row["id"]
+    cur.execute("INSERT INTO seasons (name) VALUES (%s) RETURNING id", (clean,))
+    return cur.fetchone()["id"]
+
+
+def get_or_create_team(cur, name, league_id):
+    clean = safe_text(name) or name.strip()
+    cur.execute("SELECT id FROM teams WHERE name ILIKE %s AND league_id = %s LIMIT 1", (clean, league_id))
+    row = cur.fetchone()
+    if row:
+        return row["id"]
+    cur.execute("INSERT INTO teams (name, league_id) VALUES (%s, %s) RETURNING id", (clean, league_id))
+    return cur.fetchone()["id"]
+
+
+def parse_score(score_raw):
+    if not score_raw or str(score_raw).strip() in ("", "nan", "None"):
+        return None, None
+    cleaned = re.sub(r"s*(.*?)", "", str(score_raw)).strip()
+    for sep in ["–", "-", "—"]:
+        if sep in cleaned:
+            parts = cleaned.split(sep)
+            try:
+                return int(parts[0].strip()), int(parts[1].strip())
+            except (ValueError, IndexError):
+                return None, None
+    return None, None
+
+
+def parse_date(raw):
+    if not raw or str(raw).strip() in ("", "nan", "None"):
+        return None
+    s = str(raw).strip()
+    if len(s) == 8 and s.isdigit():
+        return f"{s[:4]}-{s[4:6]}-{s[6:]}"
+    return s[:10]
+
+
+@router.post("/all")
+def sync_all(payload: SyncPayload):
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        league_id = get_or_create_league(cur, payload.league)
+        season_id = get_or_create_season(cur, payload.season)
+        fixtures_list = payload.fixtures or []
+        stats_list = payload.stats or []
+        players_list = payload.playerStats or payload.player_stats or []
+        standings_list = []\n        ha_split_list  = []  # Home/Away split table (Table 2 on FBref stats pages)
+        if payload.tables:
+            for t in payload.tables:
+                ttype = detect_table_type(t)
+                if ttype == "standings":
+                    standings_list.extend(tables_to_standings([t]))
+                elif ttype == "fixtures":
+                    fixtures_list.extend(tables_to_fixtures([t]))
+                elif ttype == "player_stats":
+                    players_list.extend(tables_to_player_stats([t]))
+                else:
+                    stats_list.extend(tables_to_squad_stats([t]))
+        fx  = _insert_fixtures(cur, league_id, season_id, payload.league, fixtures_list)
+        st  = _insert_squad_stats(cur, league_id, season_id, stats_list)
+        pl  = _insert_player_stats(cur, season_id, payload.league, players_list)
+        sd  = _insert_standings(cur, league_id, season_id, standings_list)
+        conn.commit()
+        log_scrape(cur, league_id, season_id, "sync_all", fx + st + pl + sd, 0)
+        conn.commit()
+        return {"success": True, "fixtures_inserted": fx, "stats_inserted": st, "players_inserted": pl, "standings_inserted": sd}
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+
+@router.post("/fixtures")
+def sync_fixtures(payload: SyncPayload):
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        league_id = get_or_create_league(cur, payload.league)
+        season_id = get_or_create_season(cur, payload.season)
+        rows = payload.fixtures or []
+        if payload.tables:
+            rows.extend(tables_to_fixtures(payload.tables))
+        inserted = _insert_fixtures(cur, league_id, season_id, payload.league, rows)
+        conn.commit()
+        return {"success": True, "matches_inserted": inserted}
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+
+@router.post("/stats")
+def sync_stats(payload: SyncPayload):
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        league_id = get_or_create_league(cur, payload.league)
+        season_id = get_or_create_season(cur, payload.season)
+        rows = payload.stats or []
+        if payload.tables:
+            rows.extend(tables_to_squad_stats(payload.tables))
+        inserted = _insert_squad_stats(cur, league_id, season_id, rows)
+        conn.commit()
+        return {"success": True, "stats_inserted": inserted}
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+
+@router.post("/player-stats")
+def sync_player_stats(payload: SyncPayload):
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        season_id = get_or_create_season(cur, payload.season)
+        rows = payload.player_stats or payload.playerStats or []
+        if payload.tables:
+            rows.extend(tables_to_player_stats(payload.tables))
+        inserted = _insert_player_stats(cur, season_id, payload.league, rows)
+        conn.commit()
+        return {"success": True, "players_inserted": inserted}
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+
+def tables_to_standings(tables):
+    result = []
+    for table in tables:
+        headers = [h.strip().lower() for h in table.headers]
+        for row in table.rows:
+            if len(row) < 3:
+                continue
+            r = dict(zip(headers, row))
+            team = safe_text(r.get("squad", r.get("team", "")))
+            if not team or team.lower() in ("squad", "team", ""):
+                continue
+            result.append({
+                "rank":          safe_num(r.get("rk", r.get("rank", r.get("pos", r.get("#", None))))),
+                "team":          team,
+                "games":         safe_num(r.get("mp", r.get("games", r.get("pld", None)))),
+                "wins":          safe_num(r.get("w", r.get("wins", None))),
+                "ties":          safe_num(r.get("d", r.get("draws", r.get("ties", None)))),
+                "losses":        safe_num(r.get("l", r.get("losses", None))),
+                "goals_for":     safe_num(r.get("gf", r.get("goals_for", None))),
+                "goals_against": safe_num(r.get("ga", r.get("goals_against", None))),
+                "goal_diff":     safe_num(r.get("gd", r.get("goal_diff", None))),
+                "points":        safe_num(r.get("pts", r.get("points", r.get("pt", None)))),
+                "points_avg":    safe_num(r.get("pts/g", r.get("pts_avg", r.get("points_avg", None)))),
+            })
+    return result
+
+
+def _insert_fixtures(cur, league_id, season_id, league_name, fixtures):
+    count = 0
+    for f in fixtures:
+        home = str(f.get("home_team", "")).strip()
+        away = str(f.get("away_team", "")).strip()
+        if not home or not away:
+            continue
+        home_id = get_or_create_team(cur, home, league_id)
+        away_id = get_or_create_team(cur, away, league_id)
+        home_score, away_score = parse_score(f.get("score"))
+        match_date = parse_date(f.get("date"))
+        cur.execute("""
+            INSERT INTO matches (league_id, season_id, home_team_id, away_team_id,
+                gameweek, dayofweek, match_date, start_time, home_score, away_score, score_raw,
+                attendance, venue, referee, round)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (home_team_id, away_team_id, match_date) DO UPDATE SET
+                home_score=EXCLUDED.home_score,
+                away_score=EXCLUDED.away_score,
+                score_raw=EXCLUDED.score_raw,
+                attendance=EXCLUDED.attendance,
+                venue=EXCLUDED.venue,
+                referee=EXCLUDED.referee,
+                updated_at=NOW()
+        """, (
+            league_id, season_id, home_id, away_id,
+            safe_num(f.get("gameweek")),    safe_num(f.get("dayofweek")),
+            match_date,                     safe_text(f.get("start_time", "")) or None,
+            home_score, away_score,         safe_text(f.get("score", "")),
+            safe_num(f.get("attendance")),  safe_text(f.get("venue", "")),
+            safe_text(f.get("referee", "")), safe_text(f.get("round", ""))
+        ))
+        count += 1
+    return count
+
+
+def _insert_squad_stats(cur, league_id, season_id, stats_rows):
+    count = 0
+    for row in stats_rows:
+        team_raw = safe_text(row.get("team", ""))
+        if not team_raw:
+            continue
+        split = "against" if team_raw.startswith("vs ") else "for"
+        team_name = team_raw[3:].strip() if split == "against" else team_raw
+        team_id = get_or_create_team(cur, team_name, league_id)
+        cur.execute("""
+            INSERT INTO team_squad_stats
+                (team_id, league_id, season_id, split, players_used, avg_age, possession,
+                 games, games_starts, minutes, minutes_90s, goals, assists,
+                 standard_stats, goalkeeping, shooting, playing_time, misc_stats)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (team_id, season_id, split) DO UPDATE SET
+                goals=EXCLUDED.goals, assists=EXCLUDED.assists,
+                standard_stats=EXCLUDED.standard_stats,
+                scraped_at=NOW()
+        """, (
+            team_id, league_id, season_id, split,
+            safe_num(row.get("players_used")), safe_num(row.get("avg_age")), safe_num(row.get("possession")),
+            safe_num(row.get("games")), safe_num(row.get("games_starts")), safe_num(row.get("minutes")), safe_num(row.get("minutes_90s")),
+            safe_num(row.get("goals")), safe_num(row.get("assists")),
+            json.dumps(row.get("standard_stats") or {}),
+            json.dumps(row.get("goalkeeping") or {}),
+            json.dumps(row.get("shooting") or {}),
+            json.dumps(row.get("playing_time") or {}),
+            json.dumps(row.get("misc_stats") or {}),
+        ))
+        count += 1
+    return count
+
+
+def _insert_player_stats(cur, season_id, league_name, players):
+    count = 0
+    for p in players:
+        name = str(p.get("player", "")).strip()
+        if not name or name.lower() in ("player", ""):
+            continue
+        team_name = str(p.get("team", "")).strip()
+        team_id = None
+        if team_name:
+            cur.execute("SELECT id FROM leagues WHERE name ILIKE %s LIMIT 1", (f"%{league_name}%",))
+            lg = cur.fetchone()
+            if lg:
+                team_id = get_or_create_team(cur, team_name, lg["id"])
+        cur.execute("""
+            INSERT INTO player_stats
+                (player_name, nationality, position, team_id, season_id,
+                 age, birth_year, games, games_starts, minutes, minutes_90s,
+                 goals, assists, standard_stats)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (player_name, team_id, season_id) DO UPDATE SET
+                goals=EXCLUDED.goals, assists=EXCLUDED.assists,
+                standard_stats=EXCLUDED.standard_stats,
+                scraped_at=NOW()
+        """, (
+            name,
+            safe_text(p.get("nationality", "")),
+            safe_text(p.get("position", "")),
+            team_id, season_id,
+            safe_age_int(p.get("age")),
+            safe_age_int(p.get("birth_year")),
+            safe_num(p.get("games")),
+            safe_num(p.get("games_starts")),
+            safe_num(p.get("minutes")),
+            safe_num(p.get("minutes_90s")),
+            safe_num(p.get("goals")),
+            safe_num(p.get("assists")),
+            json.dumps(p.get("standard_stats") or {})
+        ))
+        count += 1
+    return count
+
+
+def _insert_standings(cur, league_id, season_id, rows):
+    count = 0
+    for row in rows:
+        team_name = row.get("team", "")
+        if not team_name:
+            continue
+        team_id = get_or_create_team(cur, team_name, league_id)
+        cur.execute("""
+            INSERT INTO league_standings
+                (league_id, season_id, team_id, rank, games, wins, ties, losses,
+                 goals_for, goals_against, goal_diff, points, points_avg)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (team_id, league_id, season_id) DO UPDATE SET
+                rank          = EXCLUDED.rank,
+                games         = EXCLUDED.games,
+                wins          = EXCLUDED.wins,
+                ties          = EXCLUDED.ties,
+                losses        = EXCLUDED.losses,
+                goals_for     = EXCLUDED.goals_for,
+                goals_against = EXCLUDED.goals_against,
+                goal_diff     = EXCLUDED.goal_diff,
+                points        = EXCLUDED.points,
+                points_avg    = EXCLUDED.points_avg,
+                scraped_at    = NOW()
+        """, (
+            league_id, season_id, team_id,
+            row.get("rank"), row.get("games"),
+            row.get("wins"), row.get("ties"), row.get("losses"),
+            row.get("goals_for"), row.get("goals_against"), row.get("goal_diff"),
+            row.get("points"), row.get("points_avg")
+        ))
+        count += 1
+    return count
+
+
+def _update_standings_home_away(cur, league_id, season_id, rows):\n    for r in rows:\n        team_name = r["team"]\n        split_json = json.dumps(r["split"])\n        cur.execute("""\n            UPDATE league_standings ls\n            SET    home_away_split = %s\n            FROM   teams t\n            WHERE  t.id = ls.team_id\n              AND  ls.league_id = %s\n              AND  ls.season_id = %s\n              AND  LOWER(t.name) LIKE LOWER(%s)\n        """, (split_json, league_id, season_id, f"%{team_name}%"))\n\ndef log_scrape(cur, league_id, season_id, page_type, inserted, updated):
+    try:
+        cur.execute("""
+            INSERT INTO scrape_log (league_id, season_id, page_type, rows_inserted, rows_updated)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (league_id, season_id, page_type, inserted, updated))
+    except Exception:
+        pass
