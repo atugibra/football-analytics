@@ -165,31 +165,33 @@ def tables_to_player_stats(tables):
 
 
 def detect_table_type(table):
-        headers_lower = [h.strip().lower() for h in table.headers]
-        headers_set   = set(headers_lower)
+    headers_lower = [h.strip().lower() for h in table.headers]
+    headers_set = set(headers_lower)
 
     # -- Home/Away split table (Table 2 on FBref stats pages) ---
-    if (("home_games" in headers_set or "home_wins" in headers_set) and
-                ("rank" in headers_set or "rk" in headers_set) and
-                ("team" in headers_set or "squad" in headers_set)):
-                            return "standings_home_away"
+    if ("home_games" in headers_set or "home_wins" in headers_set) and ("rank" in headers_set or "rk" in headers_set) and ("team" in headers_set or "squad" in headers_set):
+        return "standings_home_away"
 
+    # -- Standings ---
     has_rank  = "rank" in headers_set or "rk" in headers_set
     has_pts   = "points" in headers_set or "pts" in headers_set
     has_squad = "team" in headers_set or "squad" in headers_set
     has_wins  = "wins" in headers_set or "w" in headers_set
     if has_rank and has_pts and has_squad and has_wins:
-                return "standings"
+        return "standings"
 
+    # -- Fixtures ---
     has_home_team = "home_team" in headers_set or "home" in headers_set
     has_date      = "date" in headers_set
     has_score     = "score" in headers_set
     if has_home_team or (has_date and has_score):
-                return "fixtures"
-            if "player" in headers_set:
-                        return "player_stats"
-                    return "squad_stats"
+        return "fixtures"
 
+    # -- Player stats ---
+    if "player" in headers_set:
+        return "player_stats"
+
+    return "squad_stats"
 
 
 def get_or_create(cur, table, unique_cols, extra_cols={}):
@@ -271,7 +273,8 @@ def sync_all(payload: SyncPayload):
         fixtures_list = payload.fixtures or []
         stats_list = payload.stats or []
         players_list = payload.playerStats or payload.player_stats or []
-        standings_list = []\n        ha_split_list  = []  # Home/Away split table (Table 2 on FBref stats pages)
+        standings_list = []
+        ha_split_list  = []  # Home/Away split table (Table 2 on FBref stats pages)
         if payload.tables:
             for t in payload.tables:
                 ttype = detect_table_type(t)
@@ -427,7 +430,7 @@ def _insert_squad_stats(cur, league_id, season_id, stats_rows):
         if not team_raw:
             continue
         split = "against" if team_raw.startswith("vs ") else "for"
-        team_name = team_raw[3:].strip() if split == "against" else team_raw
+        team_name = team_raw[3:].strip() if split == "against" else team_name
         team_id = get_or_create_team(cur, team_name, league_id)
         cur.execute("""
             INSERT INTO team_squad_stats
@@ -531,7 +534,21 @@ def _insert_standings(cur, league_id, season_id, rows):
     return count
 
 
-def _update_standings_home_away(cur, league_id, season_id, rows):\n    for r in rows:\n        team_name = r["team"]\n        split_json = json.dumps(r["split"])\n        cur.execute("""\n            UPDATE league_standings ls\n            SET    home_away_split = %s\n            FROM   teams t\n            WHERE  t.id = ls.team_id\n              AND  ls.league_id = %s\n              AND  ls.season_id = %s\n              AND  LOWER(t.name) LIKE LOWER(%s)\n        """, (split_json, league_id, season_id, f"%{team_name}%"))\n\ndef log_scrape(cur, league_id, season_id, page_type, inserted, updated):
+def _update_standings_home_away(cur, league_id, season_id, rows):
+    for r in rows:
+        team_name = r["team"]
+        split_json = json.dumps(r["split"])
+        cur.execute("""
+            UPDATE league_standings ls
+            SET    home_away_split = %s
+            FROM   teams t
+            WHERE  t.id = ls.team_id
+              AND  ls.league_id = %s
+              AND  ls.season_id = %s
+              AND  LOWER(t.name) LIKE LOWER(%s)
+        """, (split_json, league_id, season_id, f"%{team_name}%"))
+
+def log_scrape(cur, league_id, season_id, page_type, inserted, updated):
     try:
         cur.execute("""
             INSERT INTO scrape_log (league_id, season_id, page_type, rows_inserted, rows_updated)
