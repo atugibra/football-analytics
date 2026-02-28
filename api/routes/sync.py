@@ -164,22 +164,32 @@ def tables_to_player_stats(tables):
     return result
 
 
-def detect_table_type(table):\n    headers_lower = [h.strip().lower() for h in table.headers]\n    headers_set   = set(headers_lower)\n\n    # -- Home/Away split table (Table 2 on FBref stats pages) ---\n    if ("home_games" in headers_set or "home_wins" in headers_set) and \\n       ("rank" in headers_set or "rk" in headers_set) and \\n       ("team" in headers_set or "squad" in headers_set):\n        return "standings_home_away"\n
-    headers_lower = [h.strip().lower() for h in table.headers]
-    has_rank  = "rank" in headers_lower or "rk" in headers_lower
-    has_pts   = "points" in headers_lower or "pts" in headers_lower
-    has_squad = "team" in headers_lower or "squad" in headers_lower
-    has_wins  = "wins" in headers_lower or "w" in headers_lower
+def detect_table_type(table):
+        headers_lower = [h.strip().lower() for h in table.headers]
+        headers_set   = set(headers_lower)
+
+    # -- Home/Away split table (Table 2 on FBref stats pages) ---
+    if (("home_games" in headers_set or "home_wins" in headers_set) and
+                ("rank" in headers_set or "rk" in headers_set) and
+                ("team" in headers_set or "squad" in headers_set)):
+                            return "standings_home_away"
+
+    has_rank  = "rank" in headers_set or "rk" in headers_set
+    has_pts   = "points" in headers_set or "pts" in headers_set
+    has_squad = "team" in headers_set or "squad" in headers_set
+    has_wins  = "wins" in headers_set or "w" in headers_set
     if has_rank and has_pts and has_squad and has_wins:
-        return "standings"
-    has_home_team = "home_team" in headers_lower or "home" in headers_lower
-    has_date      = "date" in headers_lower
-    has_score     = "score" in headers_lower
+                return "standings"
+
+    has_home_team = "home_team" in headers_set or "home" in headers_set
+    has_date      = "date" in headers_set
+    has_score     = "score" in headers_set
     if has_home_team or (has_date and has_score):
-        return "fixtures"
-    if "player" in headers_lower:
-        return "player_stats"
-    return "squad_stats"
+                return "fixtures"
+            if "player" in headers_set:
+                        return "player_stats"
+                    return "squad_stats"
+
 
 
 def get_or_create(cur, table, unique_cols, extra_cols={}):
