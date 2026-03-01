@@ -3,7 +3,7 @@ from database import get_connection
 
 router = APIRouter()
 
-@router.get("/")
+@router.get("")
 def list_leagues():
     conn = get_connection()
     cur = conn.cursor()
@@ -23,7 +23,7 @@ def get_league(league_id: int):
         raise HTTPException(status_code=404, detail="League not found")
     return row
 
-@router.post("/")
+@router.post("")
 def create_league(name: str, country: str = None, fbref_id: int = None):
     conn = get_connection()
     cur = conn.cursor()

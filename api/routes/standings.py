@@ -51,7 +51,7 @@ def get_standings_seasons(league_id: Optional[int] = None):
     return result
 
 
-@router.get("/")
+@router.get("")
 def get_standings(league_id: Optional[int] = None, season_id: Optional[int] = None):
     conn = get_connection()
     cur = conn.cursor()

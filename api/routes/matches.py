@@ -4,7 +4,7 @@ from database import get_connection
 
 router = APIRouter()
 
-@router.get("/")
+@router.get("")
 def list_matches(
     league_id: Optional[int] = None,
     season_id: Optional[int] = None,

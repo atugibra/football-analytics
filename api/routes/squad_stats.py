@@ -4,7 +4,7 @@ from database import get_connection
 
 router = APIRouter()
 
-@router.get("/")
+@router.get("")
 def get_squad_stats(
     team_id: Optional[int] = None,
     league_id: Optional[int] = None,
