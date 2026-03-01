@@ -32,12 +32,14 @@ def get_standings_seasons(league_id: Optional[int] = None):
     rows = cur.fetchall()
     conn.close()
 
-    # Mark the most recent season per league as current
-    latest_per_league = {}
+    # Mark the most recent season per league as current (by name, not id)
+    # Season names are YYYY-YYYY format — alphabetical DESC gives the latest season first.
+    # rows are already ordered by "l.name, s.name DESC" so first entry per league = latest.
+    latest_per_league: dict[int, str] = {}
     for r in rows:
         lid = r["league_id"]
         if lid not in latest_per_league:
-            latest_per_league[lid] = r["season_id"]
+            latest_per_league[lid] = r["season"]   # store name, not id
 
     result = []
     for r in rows:
@@ -46,7 +48,7 @@ def get_standings_seasons(league_id: Optional[int] = None):
             "league":     r["league"],
             "season_id":  r["season_id"],
             "season":     r["season"],
-            "is_current": r["season_id"] == latest_per_league.get(r["league_id"]),
+            "is_current": r["season"] == latest_per_league.get(r["league_id"]),
         })
     return result
 
@@ -67,11 +69,14 @@ def get_standings(league_id: Optional[int] = None, season_id: Optional[int] = No
                ls.games, ls.wins, ls.ties, ls.losses,
                ls.goals_for, ls.goals_against, ls.goal_diff,
                ls.points, ls.points_avg, ls.home_away_split,
-               -- is_current: true when this is the latest season for this league
+               -- is_current: true for the most recent season BY NAME (not insertion id)
                (ls.season_id = (
-                   SELECT MAX(ls2.season_id)
+                   SELECT ls2.season_id
                    FROM league_standings ls2
+                   JOIN seasons s2 ON s2.id = ls2.season_id
                    WHERE ls2.league_id = ls.league_id
+                   ORDER BY s2.name DESC
+                   LIMIT 1
                )) AS is_current
         FROM league_standings ls
         JOIN teams   t ON t.id = ls.team_id

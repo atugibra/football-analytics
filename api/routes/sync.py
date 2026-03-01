@@ -287,7 +287,8 @@ def get_or_create_team(cur, name, league_id):
 def parse_score(score_raw):
     if not score_raw or str(score_raw).strip() in ("", "nan", "None"):
         return None, None
-    cleaned = re.sub(r"s*(.*?)", "", str(score_raw)).strip()
+    # Strip any parenthetical suffix like "(aet)", "(5-3 pen)", then split on dash variant
+    cleaned = re.sub(r"\s*\(.*?\)", "", str(score_raw)).strip()
     for sep in ["–", "-", "—"]:
         if sep in cleaned:
             parts = cleaned.split(sep)
