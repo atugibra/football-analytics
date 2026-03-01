@@ -404,12 +404,16 @@ def _insert_fixtures(cur, league_id, season_id, league_name, fixtures):
                 attendance, venue, referee, round)
             VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (home_team_id, away_team_id, match_date) DO UPDATE SET
+                -- Fix corrupt rows that had league_id/season_id=None from old imports
+                league_id=COALESCE(matches.league_id, EXCLUDED.league_id),
+                season_id=COALESCE(matches.season_id, EXCLUDED.season_id),
                 home_score=EXCLUDED.home_score,
                 away_score=EXCLUDED.away_score,
                 score_raw=EXCLUDED.score_raw,
                 attendance=EXCLUDED.attendance,
                 venue=EXCLUDED.venue,
                 referee=EXCLUDED.referee,
+                is_played=EXCLUDED.home_score IS NOT NULL,
                 updated_at=NOW()
         """, (
             league_id, season_id, home_id, away_id,
@@ -430,7 +434,7 @@ def _insert_squad_stats(cur, league_id, season_id, stats_rows):
         if not team_raw:
             continue
         split = "against" if team_raw.startswith("vs ") else "for"
-        team_name = team_raw[3:].strip() if split == "against" else team_name
+        team_name = team_raw[3:].strip() if split == "against" else team_raw
         team_id = get_or_create_team(cur, team_name, league_id)
         cur.execute("""
             INSERT INTO team_squad_stats
