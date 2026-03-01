@@ -307,6 +307,72 @@ def parse_date(raw):
     return s[:10]
 
 
+@router.get("/status")
+def sync_status():
+    """Return per-league sync history from scrape_log + live row counts from DB."""
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        # Per-league: last sync time and total rows inserted
+        cur.execute("""
+            SELECT
+                l.name            AS league,
+                s.name            AS season,
+                sl.page_type,
+                SUM(sl.rows_inserted) AS rows,
+                MAX(sl.scraped_at)    AS last_sync
+            FROM scrape_log sl
+            JOIN leagues  l ON l.id = sl.league_id
+            JOIN seasons  s ON s.id = sl.season_id
+            GROUP BY l.name, s.name, sl.page_type
+            ORDER BY l.name, sl.page_type
+        """)
+        log_rows = cur.fetchall()
+
+        # Live counts per league from key tables
+        cur.execute("""
+            SELECT l.name AS league,
+                COUNT(DISTINCT m.id)   AS fixtures,
+                COUNT(DISTINCT tvs.id) AS home_away_rows,
+                COUNT(DISTINCT st.id)  AS standings_rows
+            FROM leagues l
+            LEFT JOIN matches             m   ON m.league_id   = l.id
+            LEFT JOIN team_venue_stats    tvs ON tvs.league_id = l.id
+            LEFT JOIN team_standings      st  ON st.league_id  = l.id
+            GROUP BY l.name
+            ORDER BY l.name
+        """)
+        live_rows = cur.fetchall()
+
+        # Build structured response
+        by_league = {}
+        for r in log_rows:
+            lg = r["league"]
+            if lg not in by_league:
+                by_league[lg] = {"league": lg, "season": r["season"], "log": [], "live": {}}
+            by_league[lg]["log"].append({
+                "type": r["page_type"],
+                "rows": r["rows"],
+                "last_sync": r["last_sync"].isoformat() if r["last_sync"] else None
+            })
+
+        for r in live_rows:
+            lg = r["league"]
+            if lg not in by_league:
+                by_league[lg] = {"league": lg, "season": None, "log": [], "live": {}}
+            by_league[lg]["live"] = {
+                "fixtures": r["fixtures"],
+                "home_away_rows": r["home_away_rows"],
+                "standings_rows": r["standings_rows"]
+            }
+
+        return {"success": True, "leagues": list(by_league.values())}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+
 @router.post("/all")
 def sync_all(payload: SyncPayload):
     conn = get_connection()
