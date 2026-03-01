@@ -336,9 +336,9 @@ def sync_status():
                 COUNT(DISTINCT tvs.id) AS home_away_rows,
                 COUNT(DISTINCT st.id)  AS standings_rows
             FROM leagues l
-            LEFT JOIN matches             m   ON m.league_id   = l.id
-            LEFT JOIN team_venue_stats    tvs ON tvs.league_id = l.id
-            LEFT JOIN team_standings      st  ON st.league_id  = l.id
+            LEFT JOIN matches          m   ON m.league_id   = l.id
+            LEFT JOIN team_venue_stats tvs ON tvs.league_id = l.id
+            LEFT JOIN league_standings st  ON st.league_id  = l.id
             GROUP BY l.name
             ORDER BY l.name
         """)
