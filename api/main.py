@@ -13,7 +13,11 @@ load_dotenv()
 app = FastAPI(
     title="Football Analytics API",
     description="Production API for football data scraped from FBref",
-    version="1.0.0"
+    version="1.0.0",
+    # Railway terminates SSL at its proxy and sends plain HTTP to the app.
+    # Without this, FastAPI redirects /api/leagues → http://…/api/leagues/ (trailing slash),
+    # which browsers block as Mixed Content (page is HTTPS, redirect is HTTP).
+    redirect_slashes=False,
 )
 
 
