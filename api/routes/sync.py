@@ -164,6 +164,50 @@ def tables_to_player_stats(tables):
     return result
 
 
+def tables_to_home_away_stats(tables):
+    """Parse FBref home/away split table (Table 2 on stats pages).
+    Returns two dicts per team: one for 'home' and one for 'away'.
+    FBref column pattern: home_games, home_wins, home_ties, home_losses,
+    home_goals_for, home_goals_against, home_goal_diff, home_points,
+    and same with 'away_' prefix.
+    """
+    result = []
+    for table in tables:
+        headers = [h.strip().lower() for h in table.headers]
+        for row in table.rows:
+            r = dict(zip(headers, row))
+            team = safe_text(r.get("team", r.get("squad", "")))
+            if not team or team.lower() in ("team", "squad", ""):
+                continue
+            # Home row
+            result.append({
+                "team": team,
+                "venue": "home",
+                "games":          safe_num(r.get("home_games",         r.get("home_mp", None))),
+                "wins":           safe_num(r.get("home_wins",          r.get("home_w",  None))),
+                "draws":          safe_num(r.get("home_ties",          r.get("home_d",  None))),
+                "losses":         safe_num(r.get("home_losses",        r.get("home_l",  None))),
+                "goals_for":      safe_num(r.get("home_goals_for",     r.get("home_gf", None))),
+                "goals_against":  safe_num(r.get("home_goals_against", r.get("home_ga", None))),
+                "goal_diff":      safe_num(r.get("home_goal_diff",     r.get("home_gd", None))),
+                "points":         safe_num(r.get("home_points",        r.get("home_pts",None))),
+            })
+            # Away row
+            result.append({
+                "team": team,
+                "venue": "away",
+                "games":          safe_num(r.get("away_games",         r.get("away_mp", None))),
+                "wins":           safe_num(r.get("away_wins",          r.get("away_w",  None))),
+                "draws":          safe_num(r.get("away_ties",          r.get("away_d",  None))),
+                "losses":         safe_num(r.get("away_losses",        r.get("away_l",  None))),
+                "goals_for":      safe_num(r.get("away_goals_for",     r.get("away_gf", None))),
+                "goals_against":  safe_num(r.get("away_goals_against", r.get("away_ga", None))),
+                "goal_diff":      safe_num(r.get("away_goal_diff",     r.get("away_gd", None))),
+                "points":         safe_num(r.get("away_points",        r.get("away_pts",None))),
+            })
+    return result
+
+
 def detect_table_type(table):
     headers_lower = [h.strip().lower() for h in table.headers]
     headers_set = set(headers_lower)
@@ -284,16 +328,19 @@ def sync_all(payload: SyncPayload):
                     fixtures_list.extend(tables_to_fixtures([t]))
                 elif ttype == "player_stats":
                     players_list.extend(tables_to_player_stats([t]))
+                elif ttype == "standings_home_away":
+                    ha_split_list.extend(tables_to_home_away_stats([t]))
                 else:
                     stats_list.extend(tables_to_squad_stats([t]))
         fx  = _insert_fixtures(cur, league_id, season_id, payload.league, fixtures_list)
         st  = _insert_squad_stats(cur, league_id, season_id, stats_list)
         pl  = _insert_player_stats(cur, season_id, payload.league, players_list)
         sd  = _insert_standings(cur, league_id, season_id, standings_list)
+        ha  = _insert_home_away_stats(cur, league_id, season_id, ha_split_list)
         conn.commit()
-        log_scrape(cur, league_id, season_id, "sync_all", fx + st + pl + sd, 0)
+        log_scrape(cur, league_id, season_id, "sync_all", fx + st + pl + sd + ha, 0)
         conn.commit()
-        return {"success": True, "fixtures_inserted": fx, "stats_inserted": st, "players_inserted": pl, "standings_inserted": sd}
+        return {"success": True, "fixtures_inserted": fx, "stats_inserted": st, "players_inserted": pl, "standings_inserted": sd, "home_away_inserted": ha}
     except Exception as e:
         conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
@@ -456,6 +503,45 @@ def _insert_squad_stats(cur, league_id, season_id, stats_rows):
             json.dumps(row.get("shooting") or {}),
             json.dumps(row.get("playing_time") or {}),
             json.dumps(row.get("misc_stats") or {}),
+        ))
+        count += 1
+    return count
+
+
+def _insert_home_away_stats(cur, league_id, season_id, rows):
+    """Insert/update home and away venue stats per team into team_venue_stats."""
+    count = 0
+    for row in rows:
+        team_name = row.get("team", "")
+        if not team_name:
+            continue
+        team_id = get_or_create_team(cur, team_name, league_id)
+        cur.execute("""
+            INSERT INTO team_venue_stats
+                (team_id, league_id, season_id, venue,
+                 games, wins, draws, losses, goals_for, goals_against, goal_diff, points)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (team_id, season_id, venue) DO UPDATE SET
+                league_id     = EXCLUDED.league_id,
+                games         = EXCLUDED.games,
+                wins          = EXCLUDED.wins,
+                draws         = EXCLUDED.draws,
+                losses        = EXCLUDED.losses,
+                goals_for     = EXCLUDED.goals_for,
+                goals_against = EXCLUDED.goals_against,
+                goal_diff     = EXCLUDED.goal_diff,
+                points        = EXCLUDED.points,
+                updated_at    = NOW()
+        """, (
+            team_id, league_id, season_id, row.get("venue"),
+            safe_num(row.get("games")),
+            safe_num(row.get("wins")),
+            safe_num(row.get("draws")),
+            safe_num(row.get("losses")),
+            safe_num(row.get("goals_for")),
+            safe_num(row.get("goals_against")),
+            safe_num(row.get("goal_diff")),
+            safe_num(row.get("points")),
         ))
         count += 1
     return count
