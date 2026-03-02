@@ -1,6 +1,6 @@
 let API = import.meta.env.VITE_API_URL || 'https://football-analytics-production-5b3d.up.railway.app';
 if (API.startsWith('http://') && !API.includes('localhost')) {
-        API = API.replace('http://', 'https://');
+    API = API.replace('http://', 'https://');
 }
 
 const req = async (path, opts = {}) => {
