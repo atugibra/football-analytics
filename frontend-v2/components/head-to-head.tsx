@@ -1,6 +1,8 @@
 "use client"
 
-import { Crosshair, ShieldAlert } from "lucide-react"
+import { useState, useEffect } from "react"
+import { Crosshair, ShieldAlert, Loader2 } from "lucide-react"
+import { getH2H } from "@/lib/api"
 
 // Strict typography scale: text-sm (14px), text-base (16px), text-lg (20px), text-2xl (24px)
 // Strict spacing: 8px grid (p-2, p-4, mt-2, mt-4, gap-2, gap-4)
@@ -12,20 +14,38 @@ interface HeadToHeadProps {
 }
 
 export function HeadToHead({ splitView, homeTeam, awayTeam }: HeadToHeadProps) {
-    // Static placeholder data mimicking the backend
-    const previousMatches = [
-        { date: "2025-10-14", home: homeTeam, away: awayTeam, homeScore: 2, awayScore: 1 },
-        { date: "2025-03-02", home: awayTeam, away: homeTeam, homeScore: 0, awayScore: 0 },
-        { date: "2024-11-20", home: homeTeam, away: awayTeam, homeScore: 3, awayScore: 0 },
-        { date: "2024-04-15", home: awayTeam, away: homeTeam, homeScore: 1, awayScore: 2 },
-    ]
+    const [matches, setMatches] = useState<any[]>([])
+    const [loading, setLoading] = useState(true)
 
-    // Filter based on split view (e.g. if home is selected, show only when homeTeam is actually home)
+    useEffect(() => {
+        if (!homeTeam || !awayTeam) return
+
+        setLoading(true)
+        // Fetch actual head to head data
+        getH2H(homeTeam, awayTeam)
+            .then((res) => {
+                // Expected array of historical match records
+                if (res && res.data && Array.isArray(res.data)) {
+                    const parsedMatches = res.data.map((m: any) => ({
+                        date: m.date || 'Unknown',
+                        home: m.home_team || homeTeam,
+                        away: m.away_team || awayTeam,
+                        homeScore: m.home_score ?? null,
+                        awayScore: m.away_score ?? null
+                    }))
+                    setMatches(parsedMatches)
+                }
+            })
+            .catch((err) => console.error("Failed to fetch H2H:", err))
+            .finally(() => setLoading(false))
+    }, [homeTeam, awayTeam])
+
+    // Filter based on split view
     const displayMatches = splitView === "overall"
-        ? previousMatches
+        ? matches
         : splitView === "home"
-            ? previousMatches.filter(m => m.home === homeTeam)
-            : previousMatches.filter(m => m.home === awayTeam)
+            ? matches.filter(m => m.home === homeTeam)
+            : matches.filter(m => m.home === awayTeam)
 
     return (
         <div className="rounded-lg border border-border bg-card p-4 shadow-sm h-full">
@@ -37,7 +57,12 @@ export function HeadToHead({ splitView, homeTeam, awayTeam }: HeadToHeadProps) {
             </div>
 
             <div className="flex flex-col gap-4">
-                {displayMatches.length === 0 ? (
+                {loading ? (
+                    <div className="flex flex-col items-center justify-center py-8 text-center border bg-card rounded-md border-border/50 shadow-sm mt-4">
+                        <Loader2 className="h-6 w-6 animate-spin text-primary mb-2 opacity-70" />
+                        <p className="text-sm text-muted-foreground font-medium">Loading historical matchups...</p>
+                    </div>
+                ) : displayMatches.length === 0 ? (
                     <div className="flex flex-col items-center justify-center py-8 text-center bg-muted/20 border border-border/50 rounded-md border-dashed">
                         <ShieldAlert className="h-8 w-8 text-muted-foreground mb-2 opacity-50" />
                         <p className="text-sm text-muted-foreground">No matches found for this view.</p>

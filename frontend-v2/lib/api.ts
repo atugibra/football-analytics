@@ -1,16 +1,13 @@
 /**
- * API Utility for Football Analytics V2
- * Connects the V2 Frontend to the live Railway PostgreSQL database via the FastAPI backend.
+ * Utility functions for interacting with the live Railway API
  */
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "https://football-analytics-production-5b3d.up.railway.app";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://football-analytics-production-5b3d.up.railway.app';
 
-// Helper function to handle standard fetch responses
-async function fetchAPI<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-    const url = `${API_BASE_URL}${endpoint}`;
-
+// Helper for standardized fetch calls
+async function fetchWrapper(path: string, options: RequestInit = {}) {
     try {
-        const response = await fetch(url, {
+        const response = await fetch(`${API_URL}${path}`, {
             ...options,
             headers: {
                 'Content-Type': 'application/json',
@@ -24,73 +21,39 @@ async function fetchAPI<T>(endpoint: string, options: RequestInit = {}): Promise
 
         return await response.json();
     } catch (error) {
-        console.error(`Fetch failed for ${endpoint}:`, error);
-        throw error;
+        console.error(`Fetch failed for ${path}:`, error);
+        return null;
     }
 }
 
-// ---------------------------------------------------------------------------
-// 1. Matches & Fixtures
-// ---------------------------------------------------------------------------
-
-export interface MatchFilterParams {
-    league?: string;
-    season?: string;
-    limit?: number;
-    offset?: number;
-}
-
+// Matches API
 export const matchesApi = {
-    // Get upcoming and recent fixtures
-    getMatches: (params?: MatchFilterParams) => {
-        const query = new URLSearchParams();
-        if (params?.league) query.append('league', params.league);
-        if (params?.season) query.append('season', params.season);
-        if (params?.limit) query.append('limit', params.limit.toString());
-        if (params?.offset) query.append('offset', params.offset.toString());
-
-        return fetchAPI(`/api/matches?${query.toString()}`);
+    getMatches: (params?: Record<string, string>) => {
+        const query = new URLSearchParams(params).toString();
+        return fetchWrapper(`/api/matches${query ? `?${query}` : ''}`);
     },
-
-    // Get head-to-head history between two specific teams
-    getHeadToHead: (homeTeam: string, awayTeam: string) => {
-        return fetchAPI(`/api/h2h?home=${encodeURIComponent(homeTeam)}&away=${encodeURIComponent(awayTeam)}`);
-    }
+    getMatchById: (id: string) => fetchWrapper(`/api/matches/${id}`),
 };
 
-// ---------------------------------------------------------------------------
-// 2. Data Synchronization (Admin Only)
-// ---------------------------------------------------------------------------
+// Standings API (New from V1)
+export const getStandings = (params?: Record<string, string>) => {
+    const query = new URLSearchParams(params).toString();
+    return fetchWrapper(`/api/standings${query ? `?${query}` : ''}`);
+}
 
+// Data Sync API
 export const syncApi = {
-    // Get the current sync status of the database
-    getStatus: () => {
-        return fetchAPI('/api/sync/status');
-    },
-
-    // Trigger a full manual sync (Admin required)
-    triggerSync: (token: string) => {
-        return fetchAPI('/api/sync/trigger', {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${token}`
-            }
-        });
-    }
+    triggerSync: () => fetchWrapper('/api/sync/all', { method: 'POST' }),
+    getHealth: () => fetchWrapper('/api/health'),
 };
 
-// ---------------------------------------------------------------------------
-// 3. Predictions & Modeling (Premium Only)
-// ---------------------------------------------------------------------------
-
+// Predictions API
 export const predictionsApi = {
-    // Generate predictive model for upcoming matches
-    getPredictions: (league: string, token: string) => {
-        return fetchAPI(`/api/predictions/generate?league=${encodeURIComponent(league)}`, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${token}`
-            }
-        });
-    }
+    getPredictions: (leagueId?: string) => {
+        const path = leagueId ? `/api/predictions?league_id=${leagueId}` : '/api/predictions';
+        return fetchWrapper(path);
+    },
 };
+
+// Teams/H2H API
+export const getH2H = (teamId: string, oppId: string) => fetchWrapper(`/api/teams/${teamId}/head-to-head/${oppId}`)
