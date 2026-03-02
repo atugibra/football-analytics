@@ -14,7 +14,7 @@ def get_connection():
         p = urlparse(DATABASE_URL)
         return psycopg2.connect(
             host=p.hostname,
-            port=6543,
+            port=p.port or 5432,
             dbname=p.path.lstrip("/"),
             user=p.username,
             password=p.password,
@@ -28,5 +28,5 @@ def get_db():
         conn = get_connection()
         try:
                     yield conn
-finally:
-        conn.close()
+        finally:
+                conn.close()
