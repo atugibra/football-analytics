@@ -57,3 +57,53 @@ export const predictionsApi = {
 
 // Teams/H2H API
 export const getH2H = (teamId: string, oppId: string) => fetchWrapper(`/api/teams/${teamId}/head-to-head/${oppId}`)
+
+// Leagues API
+export const getLeagues = () => fetchWrapper('/api/leagues');
+
+// Teams API
+export const getTeams = (leagueId?: number) => {
+    const path = leagueId ? `/api/teams?league_id=${leagueId}` : '/api/teams';
+    return fetchWrapper(path);
+};
+
+// Prediction Generator
+export interface PredictionTeamStats {
+    goals_per_game: number | null;
+    win_rate: number | null;
+    possession: number | null;
+    avg_age: number | null;
+    goals_for: number | null;
+    goals_against: number | null;
+    rank: number | null;
+    points: number | null;
+}
+
+export interface PredictionActualResult {
+    home_score: number;
+    away_score: number;
+    score_raw: string | null;
+    match_date: string | null;
+    prediction_correct: boolean;
+}
+
+export interface PredictionResponse {
+    success: boolean;
+    home_team: string;
+    away_team: string;
+    home_win_prob: number;
+    draw_prob: number;
+    away_win_prob: number;
+    predicted_score: { home: number; away: number };
+    confidence: 'high' | 'medium' | 'low';
+    home_stats: PredictionTeamStats | null;
+    away_stats: PredictionTeamStats | null;
+    actual_result: PredictionActualResult | null;
+    error?: string;
+}
+
+export const generatePrediction = (homeTeam: string, awayTeam: string): Promise<PredictionResponse | null> =>
+    fetchWrapper('/api/predictions/generate', {
+        method: 'POST',
+        body: JSON.stringify({ home_team: homeTeam, away_team: awayTeam }),
+    });
